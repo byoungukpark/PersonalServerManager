@@ -121,8 +121,21 @@
                         CornerRadius="9" Background="{StaticResource SubtleSurfaceBrush}"
                         BorderBrush="{StaticResource StrokeBrush}" BorderThickness="1">
                     <StackPanel Orientation="Horizontal">
-                        <Ellipse Width="8" Height="8" Fill="{StaticResource WarningBrush}"
-                                 VerticalAlignment="Center" Margin="0,0,9,0" />
+                        <Ellipse Width="8" Height="8" VerticalAlignment="Center" Margin="0,0,9,0">
+                            <Ellipse.Style>
+                                <Style TargetType="{x:Type Ellipse}">
+                                    <Setter Property="Fill" Value="{StaticResource WarningBrush}" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsConnected}" Value="True">
+                                            <Setter Property="Fill" Value="{StaticResource SuccessBrush}" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding RequiresReconnect}" Value="True">
+                                            <Setter Property="Fill" Value="{StaticResource ErrorBrush}" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Ellipse.Style>
+                        </Ellipse>
                         <TextBlock Text="{Binding ConnectionStatusText}" FontWeight="SemiBold" />
                         <Border Width="1" Height="17" Background="{StaticResource StrokeBrush}"
                                 Margin="14,0" />

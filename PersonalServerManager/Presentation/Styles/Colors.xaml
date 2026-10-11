@@ -13,4 +13,6 @@
     <SolidColorBrush x:Key="SecondaryTextBrush" Color="#C4CED8" />
     <SolidColorBrush x:Key="MutedTextBrush" Color="#8C9BAA" />
     <SolidColorBrush x:Key="WarningBrush" Color="#E7AE61" />
+    <SolidColorBrush x:Key="SuccessBrush" Color="#8BE0BA" />
+    <SolidColorBrush x:Key="ErrorBrush" Color="#F48787" />
 </ResourceDictionary>

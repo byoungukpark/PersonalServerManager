@@ -8,4 +8,8 @@
     <UseWPF>true</UseWPF>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.SecurityToken" Version="4.0.101.2" />
+  </ItemGroup>
+
 </Project>
