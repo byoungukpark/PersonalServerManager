@@ -250,6 +250,7 @@ public sealed class AwsConnectionViewModel : ViewModelBase
             var confirmed = await _confirmation.ConfirmAsync(
                 "AWS 프로필 전환",
                 $"현재 연결된 '{activeProfile}' 프로필을 '{profile}'(으)로 전환하시겠습니까? 새 프로필 인증에 성공하면 활성 연결이 변경됩니다.",
+                "프로필 전환",
                 cancellationToken);
             if (!confirmed)
             {
@@ -294,6 +295,7 @@ public sealed class AwsConnectionViewModel : ViewModelBase
         var confirmed = await _confirmation.ConfirmAsync(
             "AWS 연결 해제",
             $"'{profile}' 프로필의 AWS 연결을 해제하시겠습니까? 연결 해제 후 AWS 조회와 제어를 사용할 수 없습니다.",
+            "연결 해제",
             cancellationToken);
         if (!confirmed)
         {

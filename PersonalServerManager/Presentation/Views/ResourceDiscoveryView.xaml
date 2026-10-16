@@ -1,0 +1,131 @@
+<UserControl x:Class="PersonalServerManager.Presentation.Views.ResourceDiscoveryView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="../Styles/ResourceDiscovery.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+            <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+        </ResourceDictionary>
+    </UserControl.Resources>
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="36,32,36,40" MaxWidth="1000"
+                    HorizontalAlignment="Stretch">
+            <TextBlock Text="AWS 리소스 조회" FontSize="27" FontWeight="SemiBold"
+                       Foreground="{StaticResource PrimaryTextBrush}" />
+            <TextBlock Text="연결된 프로필에서 EC2, RDS 인스턴스와 S3 버킷을 읽어옵니다. 조회는 읽기 전용입니다."
+                       Margin="0,7,0,24" Foreground="{StaticResource MutedTextBrush}" />
+
+            <Border Style="{StaticResource SurfaceCardStyle}" Padding="26" Margin="0,0,0,18">
+                <StackPanel>
+                    <TextBlock Text="조회 대상 리전" FontSize="18" FontWeight="SemiBold"
+                               Foreground="{StaticResource PrimaryTextBrush}" />
+                    <TextBlock Text="EC2와 RDS 목록에 적용할 리전을 선택합니다."
+                               Margin="0,5,0,0" FontSize="12"
+                               Foreground="{StaticResource MutedTextBrush}" />
+                    <TextBlock Text="EC2 / RDS 리전" Margin="0,24,0,8"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource SecondaryTextBrush}" />
+                    <ComboBox Width="520" HorizontalAlignment="Left"
+                              Style="{StaticResource AppComboBoxStyle}"
+                              ItemsSource="{Binding Regions}" DisplayMemberPath="DisplayName"
+                              IsEnabled="{Binding CanSelectRegion}"
+                              SelectedItem="{Binding SelectedRegion, Mode=TwoWay}" />
+                    <TextBlock Text="S3 버킷은 계정 전체에서 조회하고 버킷별 리전을 표시합니다."
+                               Margin="0,9,0,0" FontSize="12" TextWrapping="Wrap"
+                               Foreground="{StaticResource MutedTextBrush}" />
+                </StackPanel>
+            </Border>
+
+            <Border Background="{StaticResource SubtleSurfaceBrush}"
+                    BorderBrush="{StaticResource ErrorBrush}" BorderThickness="1"
+                    CornerRadius="8" Padding="14,10" Margin="0,0,0,16"
+                    Visibility="{Binding HasConnectionMessage, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <TextBlock Text="{Binding ConnectionMessage}" TextWrapping="Wrap"
+                           Foreground="{StaticResource PrimaryTextBrush}" />
+            </Border>
+
+            <TabControl Style="{StaticResource ResourceTabControlStyle}">
+                <TabItem Header="EC2">
+                    <Border Style="{StaticResource SurfaceCardStyle}" Padding="26">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <DockPanel Margin="0,0,0,14">
+                                <Button Content="EC2 목록 조회" DockPanel.Dock="Right"
+                                        Style="{StaticResource PrimaryButtonStyle}" Command="{Binding QueryEc2Command}" />
+                                <TextBlock Text="{Binding Ec2Status}" VerticalAlignment="Center"
+                                           Foreground="{StaticResource SecondaryTextBrush}" />
+                            </DockPanel>
+                            <DataGrid Grid.Row="1" ItemsSource="{Binding Ec2Instances}"
+                                      Style="{StaticResource ResourceDataGridStyle}"
+                                      AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False"
+                                      MinHeight="270" EnableRowVirtualization="True">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="이름" Binding="{Binding Name}" Width="380" />
+                                    <DataGridTextColumn Header="Instance ID" Binding="{Binding InstanceId}" Width="220" />
+                                    <DataGridTextColumn Header="유형" Binding="{Binding InstanceType}" Width="140" />
+                                    <DataGridTextColumn Header="상태" Binding="{Binding State}" Width="140" />
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Grid>
+                    </Border>
+                </TabItem>
+                <TabItem Header="RDS">
+                    <Border Style="{StaticResource SurfaceCardStyle}" Padding="26">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <DockPanel Margin="0,0,0,14">
+                                <Button Content="RDS 목록 조회" DockPanel.Dock="Right"
+                                        Style="{StaticResource PrimaryButtonStyle}" Command="{Binding QueryRdsCommand}" />
+                                <TextBlock Text="{Binding RdsStatus}" VerticalAlignment="Center"
+                                           Foreground="{StaticResource SecondaryTextBrush}" />
+                            </DockPanel>
+                            <DataGrid Grid.Row="1" ItemsSource="{Binding RdsInstances}"
+                                      Style="{StaticResource ResourceDataGridStyle}"
+                                      AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False"
+                                      MinHeight="270" EnableRowVirtualization="True">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="DB Identifier" Binding="{Binding DbInstanceIdentifier}" Width="530" />
+                                    <DataGridTextColumn Header="엔진" Binding="{Binding Engine}" Width="180" />
+                                    <DataGridTextColumn Header="상태" Binding="{Binding Status}" Width="180" />
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Grid>
+                    </Border>
+                </TabItem>
+                <TabItem Header="S3">
+                    <Border Style="{StaticResource SurfaceCardStyle}" Padding="26">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <DockPanel Margin="0,0,0,14">
+                                <Button Content="S3 버킷 조회" DockPanel.Dock="Right"
+                                        Style="{StaticResource PrimaryButtonStyle}" Command="{Binding QueryS3Command}" />
+                                <TextBlock Text="{Binding S3Status}" VerticalAlignment="Center"
+                                           Foreground="{StaticResource SecondaryTextBrush}" />
+                            </DockPanel>
+                            <DataGrid Grid.Row="1" ItemsSource="{Binding S3Buckets}"
+                                      Style="{StaticResource ResourceDataGridStyle}"
+                                      AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False"
+                                      MinHeight="270" EnableRowVirtualization="True">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="버킷" Binding="{Binding Name}" Width="700" />
+                                    <DataGridTextColumn Header="리전" Binding="{Binding Region}" Width="220" />
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Grid>
+                    </Border>
+                </TabItem>
+            </TabControl>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

@@ -5,4 +5,5 @@ public sealed record AwsConnectionInfo(
     string ProfileName,
     string AccountId,
     string CallerArn,
-    DateTimeOffset LastVerifiedAt);
+    DateTimeOffset LastVerifiedAt,
+    long ConnectionVersion);

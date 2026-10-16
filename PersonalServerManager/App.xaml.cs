@@ -25,20 +25,20 @@ public partial class App : System.Windows.Application
 
             var controlActivity = new ControlActivityState();
             var profileProvider = new AwsProfileProvider();
-            var stsGateway = new StsIdentityGateway(profileProvider);
+            var sessionFactory = new AwsProfileSessionFactory(profileProvider);
             var connection = new AwsConnectionService(
                 profileProvider,
-                stsGateway,
+                sessionFactory,
                 controlActivity,
                 new DispatcherSynchronizationContext(Dispatcher));
 
             var navigation = new NavigationService();
             navigation.Register(AppPage.Dashboard, new DashboardViewModel(navigation));
             var awsConnectionViewModel = new AwsConnectionViewModel(
-                connection, selectedProfileStore, new MessageBoxConfirmationService(), restoredProfileName);
+                connection, selectedProfileStore, new ConfirmationDialogService(), restoredProfileName);
             navigation.Register(AppPage.AwsConnection, awsConnectionViewModel);
-            navigation.Register(AppPage.GroupWorkspace, new PlaceholderViewModel(
-                "그룹 생성·관리", "서비스 그룹 생성과 관리 기능은 다음 단계에서 제공됩니다."));
+            navigation.Register(AppPage.GroupWorkspace, new ResourceDiscoveryViewModel(
+                connection, new AwsResourceQueryService(connection)));
             navigation.Register(AppPage.History, new PlaceholderViewModel(
                 "작업 기록", "제어 작업 기록 조회 기능은 이후 단계에서 제공됩니다."));
             navigation.Register(AppPage.Settings, new PlaceholderViewModel(

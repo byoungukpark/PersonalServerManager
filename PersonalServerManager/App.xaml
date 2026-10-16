@@ -15,6 +15,9 @@
             <DataTemplate DataType="{x:Type viewModels:AwsConnectionViewModel}">
                 <views:AwsConnectionView />
             </DataTemplate>
+            <DataTemplate DataType="{x:Type viewModels:ResourceDiscoveryViewModel}">
+                <views:ResourceDiscoveryView />
+            </DataTemplate>
             <DataTemplate DataType="{x:Type viewModels:PlaceholderViewModel}">
                 <views:PlaceholderView />
             </DataTemplate>

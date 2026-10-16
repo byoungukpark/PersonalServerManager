@@ -33,7 +33,7 @@ public sealed class ShellViewModel : ViewModelBase
     {
         AppPage.Dashboard => "대시보드",
         AppPage.AwsConnection => "AWS 연결 관리",
-        AppPage.GroupWorkspace => "그룹 생성·관리",
+        AppPage.GroupWorkspace => "그룹 만들기",
         AppPage.History => "작업 기록",
         AppPage.Settings => "설정",
         _ => string.Empty

@@ -75,7 +75,7 @@
                                  IsChecked="{Binding IsGroupWorkspaceSelected, Mode=OneWay}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="⊞" Width="29" FontSize="18" FontFamily="Segoe UI Symbol" />
-                            <TextBlock Text="그룹 생성·관리" />
+                            <TextBlock Text="그룹 만들기" />
                         </StackPanel>
                     </RadioButton>
                     <RadioButton Style="{StaticResource SidebarMenuStyle}"

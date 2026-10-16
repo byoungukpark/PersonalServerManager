@@ -8,23 +8,25 @@ namespace PersonalServerManager.Application.Services;
 public sealed class AwsConnectionService : INotifyPropertyChanged
 {
     private readonly IAwsProfileProvider _profiles;
-    private readonly IStsIdentityGateway _identityGateway;
+    private readonly IAwsProfileSessionFactory _sessionFactory;
     private readonly ControlActivityState _controlActivity;
     private readonly SynchronizationContext? _notificationContext;
     private readonly TimeProvider _timeProvider;
     private readonly SemaphoreSlim _sessionGate = new(1, 1);
     private AwsConnectionInfo? _activeConnection;
+    private IAwsProfileSession? _activeSession;
     private bool _requiresReconnect;
+    private long _connectionVersion;
 
     public AwsConnectionService(
         IAwsProfileProvider profiles,
-        IStsIdentityGateway identityGateway,
+        IAwsProfileSessionFactory sessionFactory,
         ControlActivityState controlActivity,
         SynchronizationContext? notificationContext = null,
         TimeProvider? timeProvider = null)
     {
         _profiles = profiles;
-        _identityGateway = identityGateway;
+        _sessionFactory = sessionFactory;
         _controlActivity = controlActivity;
         _notificationContext = notificationContext;
         _timeProvider = timeProvider ?? TimeProvider.System;
@@ -34,6 +36,7 @@ public sealed class AwsConnectionService : INotifyPropertyChanged
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public AwsConnectionInfo? ActiveConnection => _activeConnection;
+    public IAwsProfileSession? ActiveSession => IsConnected ? _activeSession : null;
     public bool IsConnected => _activeConnection is not null && !_requiresReconnect;
     public bool RequiresReconnect => _requiresReconnect;
     public bool CanChangeConnection => !_controlActivity.IsControlRunning;
@@ -53,15 +56,18 @@ public sealed class AwsConnectionService : INotifyPropertyChanged
         try
         {
             EnsureConnectionChangeAllowed();
-            var identity = await _identityGateway.GetCallerIdentityAsync(profileName, cancellationToken);
+            var candidateSession = await _sessionFactory.CreateAsync(profileName, cancellationToken);
+            var identity = await candidateSession.GetCallerIdentityAsync(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             EnsureConnectionChangeAllowed();
 
+            _activeSession = candidateSession;
             _activeConnection = new AwsConnectionInfo(
                 profileName,
                 identity.AccountId,
                 identity.CallerArn,
-                _timeProvider.GetUtcNow());
+                _timeProvider.GetUtcNow(),
+                ++_connectionVersion);
             _requiresReconnect = false;
             NotifySessionChanged();
         }
@@ -79,10 +85,12 @@ public sealed class AwsConnectionService : INotifyPropertyChanged
         {
             var active = _activeConnection ?? throw new AwsConnectionException(
                 AwsConnectionFailureKind.ProfileMissing, "현재 연결된 AWS 프로필이 없습니다.");
+            var session = _activeSession ?? throw new AwsConnectionException(
+                AwsConnectionFailureKind.ProfileMissing, "현재 AWS 인증 세션이 없습니다. 다시 연결하세요.");
 
             try
             {
-                var identity = await _identityGateway.GetCallerIdentityAsync(active.ProfileName, cancellationToken);
+                var identity = await session.GetCallerIdentityAsync(cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!string.Equals(identity.AccountId, active.AccountId, StringComparison.Ordinal))
                 {
@@ -95,7 +103,8 @@ public sealed class AwsConnectionService : INotifyPropertyChanged
                 {
                     AccountId = identity.AccountId,
                     CallerArn = identity.CallerArn,
-                    LastVerifiedAt = _timeProvider.GetUtcNow()
+                    LastVerifiedAt = _timeProvider.GetUtcNow(),
+                    ConnectionVersion = ++_connectionVersion
                 };
                 _requiresReconnect = false;
                 NotifySessionChanged();
@@ -124,6 +133,8 @@ public sealed class AwsConnectionService : INotifyPropertyChanged
         {
             EnsureConnectionChangeAllowed();
             _activeConnection = null;
+            _activeSession = null;
+            _connectionVersion++;
             _requiresReconnect = false;
             NotifySessionChanged();
         }
@@ -131,6 +142,19 @@ public sealed class AwsConnectionService : INotifyPropertyChanged
         {
             _sessionGate.Release();
         }
+    }
+
+    /// <summary>조회 중 인증이 만료되거나 무효화된 경우 자동 AWS 요청을 멈춘다.</summary>
+    public void MarkReconnectRequired()
+    {
+        if (_activeConnection is null || _requiresReconnect)
+        {
+            return;
+        }
+
+        _requiresReconnect = true;
+        _connectionVersion++;
+        NotifySessionChanged();
     }
 
     private void EnsureConnectionChangeAllowed()
@@ -160,6 +184,7 @@ public sealed class AwsConnectionService : INotifyPropertyChanged
     private void NotifySessionChanged()
     {
         RaisePropertyChanged(nameof(ActiveConnection));
+        RaisePropertyChanged(nameof(ActiveSession));
         RaisePropertyChanged(nameof(IsConnected));
         RaisePropertyChanged(nameof(RequiresReconnect));
     }
