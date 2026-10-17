@@ -1,0 +1,39 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Style x:Key="GroupStatusTextStyle" TargetType="{x:Type TextBlock}">
+        <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding Tone}" Value="success">
+                <Setter Property="Foreground" Value="{StaticResource SuccessBrush}" />
+            </DataTrigger>
+            <DataTrigger Binding="{Binding Tone}" Value="stopped">
+                <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
+            </DataTrigger>
+            <DataTrigger Binding="{Binding Tone}" Value="mixed">
+                <Setter Property="Foreground" Value="{StaticResource SecondaryTextBrush}" />
+            </DataTrigger>
+            <DataTrigger Binding="{Binding Tone}" Value="transitioning">
+                <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+            </DataTrigger>
+            <DataTrigger Binding="{Binding Tone}" Value="error">
+                <Setter Property="Foreground" Value="{StaticResource ErrorBrush}" />
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+    <Style x:Key="GroupStatusBannerStyle" TargetType="{x:Type Border}"
+           BasedOn="{StaticResource SurfaceCardStyle}">
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding HasAccessIssue}" Value="True">
+                <Setter Property="BorderBrush" Value="{StaticResource WarningBrush}" />
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+    <Style x:Key="GroupStatusBannerTextStyle" TargetType="{x:Type TextBlock}">
+        <Setter Property="Foreground" Value="{StaticResource SecondaryTextBrush}" />
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding HasAccessIssue}" Value="True">
+                <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+</ResourceDictionary>

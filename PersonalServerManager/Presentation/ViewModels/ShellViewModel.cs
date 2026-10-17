@@ -11,18 +11,35 @@ public sealed class ShellViewModel : ViewModelBase
 {
     private readonly NavigationService _navigation;
     private readonly AwsConnectionService _connection;
+    private readonly GroupWizardViewModel _wizard;
 
-    public ShellViewModel(NavigationService navigation, AwsConnectionService connection)
+    public ShellViewModel(NavigationService navigation, AwsConnectionService connection, GroupWizardViewModel wizard)
     {
         _navigation = navigation;
         _connection = connection;
+        _wizard = wizard;
         _navigation.PropertyChanged += OnNavigationChanged;
         _connection.PropertyChanged += OnConnectionChanged;
-        NavigateCommand = new RelayCommand(parameter =>
+        NavigateCommand = new RelayCommand(async parameter =>
         {
-            if (parameter is AppPage page)
+            if (parameter is not AppPage page) return;
+            try
             {
+                if (_navigation.CurrentPage == AppPage.GroupWorkspace && page != AppPage.GroupWorkspace)
+                {
+                    if (!await _wizard.ConfirmLeaveAsync())
+                    {
+                        NotifyNavigationSelection();
+                        return;
+                    }
+                    _wizard.Reset();
+                }
                 _navigation.NavigateTo(page);
+            }
+            catch (Exception)
+            {
+                _wizard.ReportNavigationError();
+                NotifyNavigationSelection();
             }
         });
     }
@@ -34,6 +51,7 @@ public sealed class ShellViewModel : ViewModelBase
         AppPage.Dashboard => "대시보드",
         AppPage.AwsConnection => "AWS 연결 관리",
         AppPage.GroupWorkspace => "그룹 만들기",
+        AppPage.GroupDetail => "그룹 상세",
         AppPage.History => "작업 기록",
         AppPage.Settings => "설정",
         _ => string.Empty
@@ -49,7 +67,7 @@ public sealed class ShellViewModel : ViewModelBase
     public bool IsConnected => _connection.IsConnected;
     public bool RequiresReconnect => _connection.RequiresReconnect;
 
-    public bool IsDashboardSelected => _navigation.CurrentPage == AppPage.Dashboard;
+    public bool IsDashboardSelected => _navigation.CurrentPage is AppPage.Dashboard or AppPage.GroupDetail;
     public bool IsAwsConnectionSelected => _navigation.CurrentPage == AppPage.AwsConnection;
     public bool IsGroupWorkspaceSelected => _navigation.CurrentPage == AppPage.GroupWorkspace;
     public bool IsHistorySelected => _navigation.CurrentPage == AppPage.History;
@@ -65,12 +83,17 @@ public sealed class ShellViewModel : ViewModelBase
         if (e.PropertyName == nameof(NavigationService.CurrentPage))
         {
             OnPropertyChanged(nameof(CurrentPageTitle));
-            OnPropertyChanged(nameof(IsDashboardSelected));
-            OnPropertyChanged(nameof(IsAwsConnectionSelected));
-            OnPropertyChanged(nameof(IsGroupWorkspaceSelected));
-            OnPropertyChanged(nameof(IsHistorySelected));
-            OnPropertyChanged(nameof(IsSettingsSelected));
+            NotifyNavigationSelection();
         }
+    }
+
+    private void NotifyNavigationSelection()
+    {
+        OnPropertyChanged(nameof(IsDashboardSelected));
+        OnPropertyChanged(nameof(IsAwsConnectionSelected));
+        OnPropertyChanged(nameof(IsGroupWorkspaceSelected));
+        OnPropertyChanged(nameof(IsHistorySelected));
+        OnPropertyChanged(nameof(IsSettingsSelected));
     }
 
     private void OnConnectionChanged(object? sender, PropertyChangedEventArgs e)

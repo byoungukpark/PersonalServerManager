@@ -19,9 +19,11 @@ public partial class App : System.Windows.Application
 
         try
         {
-            var selectedProfileStore = new JsonSelectedProfileStore();
+            var settingsStore = new JsonAppSettingsStore();
             // 설정 파일 손상은 시작 시 알리고 종료한다. 이 단계에서는 AWS API를 호출하지 않는다.
-            var restoredProfileName = await selectedProfileStore.LoadAsync(CancellationToken.None);
+            var restoredProfileName = await settingsStore.LoadAsync(CancellationToken.None);
+            var groupService = new ServiceGroupService(settingsStore);
+            _ = await groupService.ListAsync(CancellationToken.None);
 
             var controlActivity = new ControlActivityState();
             var profileProvider = new AwsProfileProvider();
@@ -33,23 +35,70 @@ public partial class App : System.Windows.Application
                 new DispatcherSynchronizationContext(Dispatcher));
 
             var navigation = new NavigationService();
-            navigation.Register(AppPage.Dashboard, new DashboardViewModel(navigation));
+            var confirmation = new ConfirmationDialogService();
+            var resourceQuery = new AwsResourceQueryService(connection);
+            var groupStatus = new GroupStatusService(connection, resourceQuery);
+            var dashboard = new DashboardViewModel(navigation, groupService, groupStatus);
+            var groupDetail = new GroupDetailViewModel(navigation, groupService, groupStatus);
+            navigation.Register(AppPage.Dashboard, dashboard);
+            navigation.Register(AppPage.GroupDetail, groupDetail);
             var awsConnectionViewModel = new AwsConnectionViewModel(
-                connection, selectedProfileStore, new ConfirmationDialogService(), restoredProfileName);
+                connection, settingsStore, confirmation, restoredProfileName);
             navigation.Register(AppPage.AwsConnection, awsConnectionViewModel);
-            navigation.Register(AppPage.GroupWorkspace, new ResourceDiscoveryViewModel(
-                connection, new AwsResourceQueryService(connection)));
+            var wizard = new GroupWizardViewModel(
+                connection, resourceQuery, groupService, navigation, confirmation,
+                group =>
+                {
+                    navigation.NavigateTo(AppPage.GroupDetail);
+                    _ = groupDetail.LoadAsync(group.Id);
+                });
+            wizard.GroupCreated += async (_, _) => await dashboard.LoadAsync();
+            navigation.PropertyChanged += (_, args) =>
+            {
+                if (args.PropertyName == nameof(NavigationService.CurrentPage) &&
+                    navigation.CurrentPage == AppPage.GroupWorkspace && wizard.IsComplete)
+                {
+                    wizard.Reset();
+                }
+            };
+            dashboard.OpenGroupRequested += id =>
+            {
+                navigation.NavigateTo(AppPage.GroupDetail);
+                _ = groupDetail.LoadAsync(id);
+            };
+            navigation.Register(AppPage.GroupWorkspace, wizard);
             navigation.Register(AppPage.History, new PlaceholderViewModel(
                 "작업 기록", "제어 작업 기록 조회 기능은 이후 단계에서 제공됩니다."));
             navigation.Register(AppPage.Settings, new PlaceholderViewModel(
                 "설정", "앱 설정 기능은 이후 단계에서 제공됩니다."));
+            await dashboard.LoadAsync();
             navigation.NavigateTo(AppPage.Dashboard);
+
+            // 앱이 열려 있는 동안 등록 그룹의 기본 상태를 30초마다 갱신한다.
+            var statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+            statusTimer.Tick += async (_, _) => await dashboard.RefreshStatusesAsync();
+            connection.PropertyChanged += async (_, args) =>
+            {
+                if (args.PropertyName != nameof(AwsConnectionService.ActiveConnection) &&
+                    args.PropertyName != nameof(AwsConnectionService.RequiresReconnect)) return;
+                if (navigation.CurrentPage == AppPage.Dashboard)
+                    await dashboard.RefreshStatusesAsync();
+                else if (navigation.CurrentPage == AppPage.GroupDetail && groupDetail.CurrentGroupId is { } id)
+                    await groupDetail.LoadAsync(id);
+            };
+            navigation.PropertyChanged += async (_, args) =>
+            {
+                if (args.PropertyName == nameof(NavigationService.CurrentPage) &&
+                    navigation.CurrentPage == AppPage.Dashboard)
+                    await dashboard.RefreshStatusesAsync();
+            };
 
             var window = new MainWindow
             {
-                DataContext = new ShellViewModel(navigation, connection)
+                DataContext = new ShellViewModel(navigation, connection, wizard)
             };
             MainWindow = window;
+            window.Closed += (_, _) => statusTimer.Stop();
             var closeAfterProfileSave = false;
             var checkingProfileSave = false;
             window.Closing += async (_, args) =>
@@ -68,6 +117,10 @@ public partial class App : System.Windows.Application
                 checkingProfileSave = true;
                 try
                 {
+                    if (!await wizard.ConfirmLeaveAsync())
+                    {
+                        return;
+                    }
                     await awsConnectionViewModel.FlushSelectedProfileAsync();
                     closeAfterProfileSave = true;
                     _ = window.Dispatcher.BeginInvoke(new Action(window.Close));
@@ -96,6 +149,7 @@ public partial class App : System.Windows.Application
             };
             ShutdownMode = ShutdownMode.OnMainWindowClose;
             window.Show();
+            statusTimer.Start();
         }
         catch (AppSettingsException exception)
         {

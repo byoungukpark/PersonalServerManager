@@ -8,6 +8,7 @@
             <ResourceDictionary.MergedDictionaries>
                 <ResourceDictionary Source="Presentation/Styles/Colors.xaml" />
                 <ResourceDictionary Source="Presentation/Styles/Controls.xaml" />
+                <ResourceDictionary Source="Presentation/Styles/GroupStatus.xaml" />
             </ResourceDictionary.MergedDictionaries>
             <DataTemplate DataType="{x:Type viewModels:DashboardViewModel}">
                 <views:DashboardView />
@@ -15,8 +16,11 @@
             <DataTemplate DataType="{x:Type viewModels:AwsConnectionViewModel}">
                 <views:AwsConnectionView />
             </DataTemplate>
-            <DataTemplate DataType="{x:Type viewModels:ResourceDiscoveryViewModel}">
-                <views:ResourceDiscoveryView />
+            <DataTemplate DataType="{x:Type viewModels:GroupWizardViewModel}">
+                <views:GroupWizardView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type viewModels:GroupDetailViewModel}">
+                <views:GroupDetailView />
             </DataTemplate>
             <DataTemplate DataType="{x:Type viewModels:PlaceholderViewModel}">
                 <views:PlaceholderView />

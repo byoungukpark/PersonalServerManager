@@ -4,7 +4,7 @@ using PersonalServerManager.Application.Models;
 namespace PersonalServerManager.Application.Services;
 
 /// <summary>현재 연결한 AWS 계정의 리소스 목록을 읽는다.</summary>
-public sealed class AwsResourceQueryService
+public sealed class AwsResourceQueryService : IAwsResourceQuery
 {
     private readonly AwsConnectionService _connection;
 
