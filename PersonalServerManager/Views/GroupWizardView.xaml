@@ -1,0 +1,306 @@
+<UserControl x:Class="PersonalServerManager.Views.GroupWizardView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Styles/ResourceDiscovery.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+            <BooleanToVisibilityConverter x:Key="BoolVisibility" />
+        </ResourceDictionary>
+    </UserControl.Resources>
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="36,30,36,40" MaxWidth="1060" HorizontalAlignment="Stretch">
+            <TextBlock Text="서비스 그룹 만들기" FontSize="27" FontWeight="SemiBold"
+                       Foreground="{StaticResource PrimaryTextBrush}" />
+            <TextBlock Text="그룹 정보, 서비스와 리소스, 시작 순서를 정한 뒤 마지막 단계에서 등록합니다."
+                       Margin="0,7,0,22" Foreground="{StaticResource MutedTextBrush}" />
+            <Border Style="{StaticResource SurfaceCardStyle}" Padding="17,12" Margin="0,0,0,18">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="진행 단계 " Foreground="{StaticResource SecondaryTextBrush}" />
+                    <TextBlock Text="{Binding Step, StringFormat={}{0} / 5}"
+                               FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" />
+                    <TextBlock Text="   그룹 정보 → 서비스 선택 → 리소스 선택 → 시작 순서 → 검토·등록"
+                               Foreground="{StaticResource MutedTextBrush}" />
+                </StackPanel>
+            </Border>
+
+            <Border Background="{StaticResource SubtleSurfaceBrush}" BorderBrush="{StaticResource ErrorBrush}"
+                    BorderThickness="1" CornerRadius="8" Padding="14,10" Margin="0,0,0,16"
+                    Visibility="{Binding HasMessage, Converter={StaticResource BoolVisibility}}">
+                <TextBlock Text="{Binding Message}" TextWrapping="Wrap" Foreground="{StaticResource PrimaryTextBrush}" />
+            </Border>
+
+            <!-- 1. 그룹 정보 -->
+            <StackPanel Visibility="{Binding IsStep1, Converter={StaticResource BoolVisibility}}">
+                <Border Style="{StaticResource SurfaceCardStyle}" Padding="26">
+                    <StackPanel>
+                        <TextBlock Text="1. 그룹 정보" FontSize="20" FontWeight="SemiBold"
+                                   Foreground="{StaticResource PrimaryTextBrush}" />
+                        <TextBlock Text="현재 연결된 AWS 계정에 그룹을 만듭니다. 생성 후 그룹 리전은 바꿀 수 없습니다."
+                                   Margin="0,6,0,22" Foreground="{StaticResource MutedTextBrush}" />
+                        <TextBlock Text="그룹 이름" Style="{StaticResource WizardLabelStyle}" />
+                        <TextBox Text="{Binding GroupName, UpdateSourceTrigger=PropertyChanged}"
+                                 Style="{StaticResource WizardTextBoxStyle}" MaxLength="50"
+                                 Margin="0,8,0,6" />
+                        <TextBlock Text="1~50자 · 한글, 영문, 숫자, 공백, - _ . 사용 가능"
+                                   Foreground="{StaticResource MutedTextBrush}" FontSize="12" />
+                        <TextBlock Text="연결된 계정 · 프로필" Style="{StaticResource WizardLabelStyle}" Margin="0,23,0,8" />
+                        <TextBlock Text="{Binding ActiveAccountText}" Foreground="{StaticResource PrimaryTextBrush}" />
+                        <TextBlock Text="그룹 리전" Style="{StaticResource WizardLabelStyle}" Margin="0,23,0,8" />
+                        <ComboBox Width="520" HorizontalAlignment="Left" Style="{StaticResource AppComboBoxStyle}"
+                                  ItemsSource="{Binding Regions}" DisplayMemberPath="DisplayName"
+                                  SelectedItem="{Binding SelectedRegion, Mode=TwoWay}"
+                                  IsEnabled="{Binding CanSelectRegion}" />
+                        <TextBlock Text="S3 버킷은 계정 전체에서 조회하며 선택한 버킷의 실제 리전을 따로 저장합니다."
+                                   Margin="0,9,0,0" FontSize="12" TextWrapping="Wrap"
+                                   Foreground="{StaticResource MutedTextBrush}" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <!-- 2. 서비스 선택 -->
+            <StackPanel Visibility="{Binding IsStep2, Converter={StaticResource BoolVisibility}}">
+                <Border Style="{StaticResource SurfaceCardStyle}" Padding="26">
+                    <StackPanel>
+                        <TextBlock Text="2. 서비스 선택" FontSize="20" FontWeight="SemiBold"
+                                   Foreground="{StaticResource PrimaryTextBrush}" />
+                        <TextBlock Text="선택한 서비스만 다음 단계에서 조회할 수 있습니다. 서비스를 선택하지 않은 빈 그룹도 만들 수 있습니다."
+                                   Margin="0,6,0,20" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
+                        <Border Style="{StaticResource WizardChoiceCardStyle}" Margin="0,0,0,10">
+                            <CheckBox Content="EC2 인스턴스" IsChecked="{Binding IncludeEc2}"
+                                      Style="{StaticResource WizardCheckBoxStyle}" />
+                        </Border>
+                        <Border Style="{StaticResource WizardChoiceCardStyle}" Margin="0,0,0,10">
+                            <CheckBox Content="RDS DB 인스턴스" IsChecked="{Binding IncludeRds}"
+                                      Style="{StaticResource WizardCheckBoxStyle}" />
+                        </Border>
+                        <Border Style="{StaticResource WizardChoiceCardStyle}">
+                            <CheckBox Content="S3 버킷" IsChecked="{Binding IncludeS3}"
+                                      Style="{StaticResource WizardCheckBoxStyle}" />
+                        </Border>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <!-- 3. 리소스 선택 -->
+            <StackPanel Visibility="{Binding IsStep3, Converter={StaticResource BoolVisibility}}">
+                <Border Style="{StaticResource SurfaceCardStyle}" Padding="22" Margin="0,0,0,16">
+                    <StackPanel>
+                        <TextBlock Text="3. 리소스 선택" FontSize="20" FontWeight="SemiBold"
+                                   Foreground="{StaticResource PrimaryTextBrush}" />
+                        <TextBlock Text="{Binding SelectedCountText}" Margin="0,8,0,0"
+                                   Foreground="{StaticResource AccentBrush}" />
+                        <TextBlock Text="이미 다른 그룹에 등록된 리소스는 선택할 수 없습니다. 표 헤더를 눌러 정렬해도 선택은 유지됩니다."
+                                   Margin="0,6,0,0" FontSize="12" TextWrapping="Wrap"
+                                   Foreground="{StaticResource MutedTextBrush}" />
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource SurfaceCardStyle}" Padding="25"
+                        Visibility="{Binding HasSelectedServices, Converter={StaticResource BoolVisibility}}">
+                    <TabControl Style="{StaticResource ResourceTabControlStyle}"
+                                SelectedIndex="{Binding SelectedResourceTabIndex, Mode=TwoWay}">
+                        <TabItem Header="EC2" Visibility="{Binding IncludeEc2, Converter={StaticResource BoolVisibility}}">
+                            <StackPanel>
+                                <DockPanel Margin="0,0,0,13">
+                                    <Button Content="EC2 목록 조회" DockPanel.Dock="Right" Style="{StaticResource WizardPrimaryButtonStyle}"
+                                            Command="{Binding QueryEc2Command}" />
+                                    <TextBlock Text="{Binding Ec2Status}" VerticalAlignment="Center"
+                                               Foreground="{StaticResource SecondaryTextBrush}" />
+                                </DockPanel>
+                                <DataGrid ItemsSource="{Binding Ec2Choices}" Style="{StaticResource ResourceDataGridStyle}"
+                                          AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False"
+                                          MinHeight="280" MaxHeight="420" EnableRowVirtualization="True">
+                                    <DataGrid.Columns>
+                                        <DataGridTemplateColumn Header="선택" Width="70">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate><CheckBox Style="{StaticResource ResourceSelectionCheckBoxStyle}"
+                                                                        IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                        IsEnabled="{Binding CanSelect}" ToolTip="{Binding RegistrationText}"
+                                                                        HorizontalAlignment="Center" /></DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTextColumn Header="이름" Binding="{Binding Name}" Width="220" />
+                                        <DataGridTextColumn Header="Instance ID" Binding="{Binding Id}" Width="190" />
+                                        <DataGridTextColumn Header="유형" Binding="{Binding Detail}" Width="120" />
+                                        <DataGridTextColumn Header="상태" Binding="{Binding State}" Width="110" />
+                                        <DataGridTextColumn Header="등록 정보" Binding="{Binding RegistrationText}" Width="190" />
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </StackPanel>
+                        </TabItem>
+                        <TabItem Header="RDS" Visibility="{Binding IncludeRds, Converter={StaticResource BoolVisibility}}">
+                            <StackPanel>
+                                <DockPanel Margin="0,0,0,13">
+                                    <Button Content="RDS 목록 조회" DockPanel.Dock="Right" Style="{StaticResource WizardPrimaryButtonStyle}"
+                                            Command="{Binding QueryRdsCommand}" />
+                                    <TextBlock Text="{Binding RdsStatus}" VerticalAlignment="Center"
+                                               Foreground="{StaticResource SecondaryTextBrush}" />
+                                </DockPanel>
+                                <DataGrid ItemsSource="{Binding RdsChoices}" Style="{StaticResource ResourceDataGridStyle}"
+                                          AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False"
+                                          MinHeight="280" MaxHeight="420" EnableRowVirtualization="True">
+                                    <DataGrid.Columns>
+                                        <DataGridTemplateColumn Header="선택" Width="70">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate><CheckBox Style="{StaticResource ResourceSelectionCheckBoxStyle}"
+                                                                        IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                        IsEnabled="{Binding CanSelect}" ToolTip="{Binding RegistrationText}"
+                                                                        HorizontalAlignment="Center" /></DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTextColumn Header="DB Identifier" Binding="{Binding Id}" Width="330" />
+                                        <DataGridTextColumn Header="엔진" Binding="{Binding Detail}" Width="160" />
+                                        <DataGridTextColumn Header="상태" Binding="{Binding State}" Width="120" />
+                                        <DataGridTextColumn Header="등록 정보" Binding="{Binding RegistrationText}" Width="220" />
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </StackPanel>
+                        </TabItem>
+                        <TabItem Header="S3" Visibility="{Binding IncludeS3, Converter={StaticResource BoolVisibility}}">
+                            <StackPanel>
+                                <DockPanel Margin="0,0,0,13">
+                                    <Button Content="S3 버킷 조회" DockPanel.Dock="Right" Style="{StaticResource WizardPrimaryButtonStyle}"
+                                            Command="{Binding QueryS3Command}" />
+                                    <TextBlock Text="{Binding S3Status}" VerticalAlignment="Center"
+                                               Foreground="{StaticResource SecondaryTextBrush}" />
+                                </DockPanel>
+                                <DataGrid ItemsSource="{Binding S3Choices}" Style="{StaticResource ResourceDataGridStyle}"
+                                          AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False"
+                                          MinHeight="280" MaxHeight="420" EnableRowVirtualization="True">
+                                    <DataGrid.Columns>
+                                        <DataGridTemplateColumn Header="선택" Width="70">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate><CheckBox Style="{StaticResource ResourceSelectionCheckBoxStyle}"
+                                                                        IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                        IsEnabled="{Binding CanSelect}" ToolTip="{Binding RegistrationText}"
+                                                                        HorizontalAlignment="Center" /></DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTextColumn Header="버킷" Binding="{Binding Name}" Width="470" />
+                                        <DataGridTextColumn Header="버킷 리전" Binding="{Binding Region}" Width="180" />
+                                        <DataGridTextColumn Header="등록 정보" Binding="{Binding RegistrationText}" Width="220" />
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </StackPanel>
+                        </TabItem>
+                    </TabControl>
+                </Border>
+                <Border Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource StrokeBrush}"
+                        BorderThickness="1" CornerRadius="16" Padding="24">
+                    <Border.Style>
+                        <Style TargetType="Border" BasedOn="{StaticResource SurfaceCardStyle}">
+                            <Setter Property="Visibility" Value="Visible" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding HasSelectedServices}" Value="True">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <TextBlock Text="선택한 서비스가 없습니다. 다음 단계로 진행하면 빈 그룹을 등록할 수 있습니다."
+                               Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" />
+                </Border>
+            </StackPanel>
+
+            <!-- 4. 시작 순서 -->
+            <StackPanel Visibility="{Binding IsStep4, Converter={StaticResource BoolVisibility}}">
+                <Border Style="{StaticResource SurfaceCardStyle}" Padding="26">
+                    <StackPanel>
+                        <TextBlock Text="4. 시작 순서" FontSize="20" FontWeight="SemiBold"
+                                   Foreground="{StaticResource PrimaryTextBrush}" />
+                        <TextBlock Text="EC2와 RDS를 섞어 시작 순서를 정합니다. 그룹 중지는 역순이며 S3는 제어 대상이 아닙니다."
+                                   Margin="0,6,0,20" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <ListBox x:Name="OrderList" ItemsSource="{Binding StartOrder}"
+                                     SelectedItem="{Binding SelectedOrder, Mode=TwoWay}"
+                                     Style="{StaticResource WizardOrderListStyle}"
+                                     AllowDrop="True" PreviewMouseLeftButtonDown="OrderList_PreviewMouseLeftButtonDown"
+                                     PreviewMouseMove="OrderList_PreviewMouseMove" Drop="OrderList_Drop"
+                                     MinHeight="200">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate><TextBlock Text="{Binding DisplayName}" Padding="8,5" /></DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                            <StackPanel Grid.Column="1" Margin="15,0,0,0">
+                                <Button Content="위로" Style="{StaticResource SecondaryButtonStyle}"
+                                        Command="{Binding MoveUpCommand}" IsEnabled="{Binding CanMoveUp}" Margin="0,0,0,9" />
+                                <Button Content="아래로" Style="{StaticResource SecondaryButtonStyle}"
+                                        Command="{Binding MoveDownCommand}" IsEnabled="{Binding CanMoveDown}" />
+                            </StackPanel>
+                        </Grid>
+                        <TextBlock Text="항목을 드래그해서 순서를 바꿀 수도 있습니다."
+                                   Margin="0,12,0,0" FontSize="12" Foreground="{StaticResource MutedTextBrush}" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <!-- 5. 검토 및 등록 -->
+            <StackPanel Visibility="{Binding IsStep5, Converter={StaticResource BoolVisibility}}">
+                <Border Style="{StaticResource SurfaceCardStyle}" Padding="26">
+                    <StackPanel>
+                        <TextBlock Text="5. 검토 및 등록" FontSize="20" FontWeight="SemiBold"
+                                   Foreground="{StaticResource PrimaryTextBrush}" />
+                        <TextBlock Text="등록 버튼을 누르면 아래 정보가 로컬 JSON에 저장됩니다."
+                                   Margin="0,6,0,22" Foreground="{StaticResource MutedTextBrush}" />
+                        <TextBlock Text="그룹 이름" Style="{StaticResource WizardLabelStyle}" />
+                        <TextBlock Text="{Binding GroupName}" Margin="0,5,0,17" Foreground="{StaticResource PrimaryTextBrush}" />
+                        <TextBlock Text="AWS 계정 · 프로필" Style="{StaticResource WizardLabelStyle}" />
+                        <StackPanel Orientation="Horizontal" Margin="0,5,0,17">
+                            <TextBlock Text="{Binding DraftAccountText}" Foreground="{StaticResource PrimaryTextBrush}" />
+                            <TextBlock Text=" · " Foreground="{StaticResource MutedTextBrush}" />
+                            <TextBlock Text="{Binding DraftProfileText}" Foreground="{StaticResource PrimaryTextBrush}" />
+                        </StackPanel>
+                        <TextBlock Text="그룹 리전" Style="{StaticResource WizardLabelStyle}" />
+                        <TextBlock Text="{Binding RegionText}" Margin="0,5,0,17" Foreground="{StaticResource PrimaryTextBrush}" />
+                        <TextBlock Text="등록 리소스" Style="{StaticResource WizardLabelStyle}" />
+                        <TextBlock Text="{Binding ReviewResources}" Margin="0,5,0,17" TextWrapping="Wrap"
+                                   Foreground="{StaticResource PrimaryTextBrush}" />
+                        <TextBlock Text="시작 순서" Style="{StaticResource WizardLabelStyle}" />
+                        <TextBlock Text="{Binding StartOrderSummary}" Margin="0,5,0,0" TextWrapping="Wrap"
+                                   Foreground="{StaticResource PrimaryTextBrush}" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <!-- 저장 후 전용 화면 -->
+            <StackPanel Visibility="{Binding IsComplete, Converter={StaticResource BoolVisibility}}">
+                <Border Style="{StaticResource SurfaceCardStyle}" Padding="42">
+                    <StackPanel HorizontalAlignment="Center" MaxWidth="550">
+                        <TextBlock Text="✓" FontSize="42" HorizontalAlignment="Center"
+                                   Foreground="{StaticResource SuccessBrush}" />
+                        <TextBlock Text="그룹 등록이 완료되었습니다" FontSize="22" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center" Margin="0,9,0,10"
+                                   Foreground="{StaticResource PrimaryTextBrush}" />
+                        <TextBlock Text="{Binding GroupName}" FontSize="17" HorizontalAlignment="Center"
+                                   Foreground="{StaticResource SecondaryTextBrush}" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,25,0,0">
+                            <Button Content="그룹 상세 열기" Command="{Binding OpenGroupCommand}"
+                                    Style="{StaticResource WizardPrimaryButtonStyle}" Margin="0,0,10,0" />
+                            <Button Content="대시보드로 이동" Command="{Binding DashboardCommand}"
+                                    Style="{StaticResource SecondaryButtonStyle}" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <DockPanel Margin="0,20,0,0" LastChildFill="False">
+                <Button Content="이전" Command="{Binding PreviousCommand}" IsEnabled="{Binding CanGoPrevious}"
+                        Style="{StaticResource SecondaryButtonStyle}" DockPanel.Dock="Left" />
+                <Button Content="등록" Command="{Binding SaveCommand}"
+                        Style="{StaticResource WizardPrimaryButtonStyle}" DockPanel.Dock="Right"
+                        Visibility="{Binding IsStep5, Converter={StaticResource BoolVisibility}}" />
+                <Button Content="다음" Command="{Binding NextCommand}" DockPanel.Dock="Right">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource WizardPrimaryButtonStyle}">
+                            <Setter Property="Visibility" Value="Visible" />
+                            <Style.Triggers><DataTrigger Binding="{Binding IsStep5}" Value="True"><Setter Property="Visibility" Value="Collapsed" /></DataTrigger>
+                                <DataTrigger Binding="{Binding IsComplete}" Value="True"><Setter Property="Visibility" Value="Collapsed" /></DataTrigger></Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+            </DockPanel>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

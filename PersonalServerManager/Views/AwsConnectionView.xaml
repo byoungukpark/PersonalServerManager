@@ -1,0 +1,172 @@
+<UserControl x:Class="PersonalServerManager.Views.AwsConnectionView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Loaded="OnLoaded">
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Styles/AwsConnection.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+            <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+        </ResourceDictionary>
+    </UserControl.Resources>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="36,32,36,40" MaxWidth="1000"
+                    HorizontalAlignment="Stretch">
+            <TextBlock Text="AWS 연결 관리" FontSize="27" FontWeight="SemiBold"
+                       Foreground="{StaticResource PrimaryTextBrush}" />
+            <TextBlock Text="PC에 등록된 AWS 프로필을 선택하고 연결 상태를 확인합니다."
+                       Margin="0,7,0,26" Foreground="{StaticResource MutedTextBrush}" />
+
+            <Border Background="{StaticResource ConnectionErrorSurfaceBrush}"
+                    BorderBrush="{StaticResource ConnectionErrorBrush}"
+                    BorderThickness="1" CornerRadius="9" Padding="15,12"
+                    Margin="0,0,0,16"
+                    Visibility="{Binding HasError, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="!" FontWeight="Bold" FontSize="16"
+                               Foreground="{StaticResource ConnectionErrorBrush}"
+                               Margin="0,0,11,0" />
+                    <TextBlock Grid.Column="1" Text="{Binding ErrorMessage}" TextWrapping="Wrap"
+                               Foreground="{StaticResource PrimaryTextBrush}" />
+                </Grid>
+            </Border>
+
+            <Border Background="{StaticResource ConnectionSuccessSurfaceBrush}"
+                    BorderBrush="{StaticResource ConnectionSuccessBrush}"
+                    BorderThickness="1" CornerRadius="9" Padding="15,12"
+                    Margin="0,0,0,16"
+                    Visibility="{Binding HasSuccessMessage, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <TextBlock Text="{Binding SuccessMessage}" TextWrapping="Wrap"
+                           Foreground="{StaticResource ConnectionSuccessBrush}" />
+            </Border>
+
+            <Border Style="{StaticResource SurfaceCardStyle}" Padding="26" Margin="0,0,0,18">
+                <StackPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="로컬 AWS 프로필" FontSize="18" FontWeight="SemiBold"
+                                       Foreground="{StaticResource PrimaryTextBrush}" />
+                            <TextBlock Text="프로필을 고르는 것만으로 AWS에 연결되지는 않습니다."
+                                       Margin="0,5,0,0" FontSize="12"
+                                       Foreground="{StaticResource MutedTextBrush}" />
+                        </StackPanel>
+                        <Button Grid.Column="1" Content="↻  프로필 목록 다시 읽기"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                Command="{Binding RefreshProfilesCommand}" />
+                    </Grid>
+
+                    <TextBlock Text="연결할 프로필" Margin="0,24,0,8"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource SecondaryTextBrush}" />
+                    <ComboBox Width="520" HorizontalAlignment="Left"
+                              Style="{StaticResource AppComboBoxStyle}"
+                              ItemsSource="{Binding Profiles}"
+                              SelectedItem="{Binding SelectedProfile, Mode=TwoWay}"
+                              IsEnabled="{Binding CanSelectProfile}" />
+                    <TextBlock Text="{Binding ProfileListMessage}" Margin="0,9,0,0"
+                               FontSize="12" Foreground="{StaticResource MutedTextBrush}"
+                               TextWrapping="Wrap" />
+
+                    <TextBlock Text="제어 작업이 진행 중이어서 프로필 전환과 연결 해제를 잠시 사용할 수 없습니다."
+                               Margin="0,14,0,0" TextWrapping="Wrap"
+                               Foreground="{StaticResource WarningBrush}"
+                               Visibility="{Binding IsConnectionChangeBlocked, Converter={StaticResource BooleanToVisibilityConverter}}" />
+
+                    <StackPanel Orientation="Horizontal" Margin="0,24,0,0">
+                        <Button Content="연결" Style="{StaticResource ConnectionPrimaryButtonStyle}"
+                                Command="{Binding ConnectCommand}" />
+                        <Button Content="연결 상태 확인"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                Margin="10,0,0,0" Command="{Binding VerifyCommand}" />
+                        <Button Content="연결 해제"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                Margin="10,0,0,0" Command="{Binding DisconnectCommand}" />
+                    </StackPanel>
+
+                    <StackPanel Margin="0,22,0,0"
+                                Visibility="{Binding IsBusy, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <ProgressBar Height="4" IsIndeterminate="True"
+                                     Foreground="{StaticResource AccentBrush}"
+                                     Background="{StaticResource SubtleSurfaceBrush}" />
+                        <TextBlock Text="{Binding BusyMessage}" Margin="0,8,0,0"
+                                   FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource SurfaceCardStyle}" Padding="26">
+                <StackPanel>
+                    <TextBlock Text="현재 연결" FontSize="18" FontWeight="SemiBold"
+                               Foreground="{StaticResource PrimaryTextBrush}" />
+                    <TextBlock Text="현재 앱 전체에서 사용하는 AWS 프로필과 인증 결과입니다."
+                               Margin="0,5,0,20" FontSize="12"
+                               Foreground="{StaticResource MutedTextBrush}" />
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="175" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Text="연결 상태" Margin="0,0,0,14"
+                                   Foreground="{StaticResource MutedTextBrush}" />
+                        <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal"
+                                    Margin="0,0,0,14">
+                            <Ellipse Width="8" Height="8" Margin="0,0,9,0"
+                                     VerticalAlignment="Center">
+                                <Ellipse.Style>
+                                    <Style TargetType="{x:Type Ellipse}">
+                                        <Setter Property="Fill" Value="{StaticResource WarningBrush}" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsConnected}" Value="True">
+                                                <Setter Property="Fill" Value="{StaticResource ConnectionSuccessBrush}" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding RequiresReconnect}" Value="True">
+                                                <Setter Property="Fill" Value="{StaticResource ConnectionErrorBrush}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Ellipse.Style>
+                            </Ellipse>
+                            <TextBlock Text="{Binding ConnectionStatusText}" FontWeight="SemiBold"
+                                       Foreground="{StaticResource PrimaryTextBrush}" />
+                        </StackPanel>
+                        <TextBlock Grid.Row="1" Text="활성 프로필" Margin="0,0,0,14"
+                                   Foreground="{StaticResource MutedTextBrush}" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ActiveProfileName}"
+                                   Margin="0,0,0,14" Foreground="{StaticResource PrimaryTextBrush}" />
+                        <TextBlock Grid.Row="2" Text="AWS 계정 ID" Margin="0,0,0,14"
+                                   Foreground="{StaticResource MutedTextBrush}" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding AccountId}"
+                                   Margin="0,0,0,14" Foreground="{StaticResource PrimaryTextBrush}" />
+                        <TextBlock Grid.Row="3" Text="Caller ARN" Margin="0,0,0,14"
+                                   Foreground="{StaticResource MutedTextBrush}" />
+                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding CallerArn}"
+                                   Margin="0,0,0,14" TextWrapping="Wrap"
+                                   Foreground="{StaticResource PrimaryTextBrush}" />
+                        <TextBlock Grid.Row="4" Text="마지막 인증 확인"
+                                   Foreground="{StaticResource MutedTextBrush}" />
+                        <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding LastVerifiedAtText}"
+                                   Foreground="{StaticResource PrimaryTextBrush}" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

@@ -1,11 +1,11 @@
-using PersonalServerManager.Application.Contracts;
-using PersonalServerManager.Application.Models;
-using PersonalServerManager.Application.Services;
-using PersonalServerManager.Domain.Models;
-using PersonalServerManager.Presentation.Dialogs;
-using PersonalServerManager.Presentation.Navigation;
-using PersonalServerManager.Presentation.ViewModels;
-using PersonalServerManager.Presentation.Views;
+using PersonalServerManager.Services.Aws;
+using PersonalServerManager.Services.Persistence;
+using PersonalServerManager.Models;
+using PersonalServerManager.Services.Groups;
+using PersonalServerManager.Services.Dialogs;
+using PersonalServerManager.Navigation;
+using PersonalServerManager.ViewModels;
+using PersonalServerManager.Views;
 
 var checks = new List<(string Name, Func<Task> Run)>
 {

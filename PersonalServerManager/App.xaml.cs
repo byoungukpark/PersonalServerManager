@@ -1,11 +1,11 @@
 using System.Windows;
 using System.Windows.Threading;
-using PersonalServerManager.Application.Services;
-using PersonalServerManager.Infrastructure.Aws;
-using PersonalServerManager.Infrastructure.Persistence;
-using PersonalServerManager.Presentation.Dialogs;
-using PersonalServerManager.Presentation.Navigation;
-using PersonalServerManager.Presentation.ViewModels;
+using PersonalServerManager.Services.Aws;
+using PersonalServerManager.Services.Groups;
+using PersonalServerManager.Services.Persistence;
+using PersonalServerManager.Services.Dialogs;
+using PersonalServerManager.Navigation;
+using PersonalServerManager.ViewModels;
 
 namespace PersonalServerManager;
 

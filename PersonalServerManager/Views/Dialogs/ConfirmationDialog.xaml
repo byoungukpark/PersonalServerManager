@@ -1,0 +1,60 @@
+<Window x:Class="PersonalServerManager.Views.Dialogs.ConfirmationDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="확인" Width="560" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner" WindowStyle="None"
+        AllowsTransparency="True" Background="Transparent"
+        ResizeMode="NoResize" ShowInTaskbar="False"
+        FontFamily="Segoe UI" FontSize="14"
+        Foreground="{StaticResource PrimaryTextBrush}"
+        Loaded="OnLoaded">
+    <Border Style="{StaticResource SurfaceCardStyle}"
+            Margin="18" Padding="26" CornerRadius="16">
+        <Border.Effect>
+            <DropShadowEffect Color="#000000" Opacity="0.48"
+                              BlurRadius="22" ShadowDepth="7" />
+        </Border.Effect>
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="42" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Border Width="40" Height="40" CornerRadius="10"
+                        Background="{StaticResource SelectedBrush}">
+                    <TextBlock Text="!" FontSize="22" FontWeight="Bold"
+                               Foreground="{StaticResource WarningBrush}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <StackPanel Grid.Column="1" Margin="14,0,0,0"
+                            VerticalAlignment="Center">
+                    <TextBlock Text="AWS 연결 관리" FontSize="11"
+                               Foreground="{StaticResource MutedTextBrush}" />
+                    <TextBlock x:Name="TitleText" FontSize="20" FontWeight="SemiBold"
+                               Foreground="{StaticResource PrimaryTextBrush}"
+                               Margin="0,3,0,0" />
+                </StackPanel>
+            </Grid>
+
+            <TextBlock x:Name="MessageText" Grid.Row="1" Margin="0,22,0,0"
+                       TextWrapping="Wrap" LineHeight="22"
+                       Foreground="{StaticResource SecondaryTextBrush}" />
+
+            <StackPanel Grid.Row="2" Orientation="Horizontal"
+                        HorizontalAlignment="Right" Margin="0,28,0,0">
+                <Button x:Name="CancelButton" Content="취소" MinWidth="100"
+                        Style="{StaticResource SecondaryButtonStyle}"
+                        IsCancel="True" />
+                <Button x:Name="ConfirmButton" MinWidth="120" Margin="10,0,0,0"
+                        Style="{StaticResource PrimaryButtonStyle}"
+                        Click="OnConfirmClick" />
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>

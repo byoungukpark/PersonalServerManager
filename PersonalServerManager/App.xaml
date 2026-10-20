@@ -1,14 +1,14 @@
-﻿<Application x:Class="PersonalServerManager.App"
+<Application x:Class="PersonalServerManager.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:viewModels="clr-namespace:PersonalServerManager.Presentation.ViewModels"
-             xmlns:views="clr-namespace:PersonalServerManager.Presentation.Views">
+             xmlns:viewModels="clr-namespace:PersonalServerManager.ViewModels"
+             xmlns:views="clr-namespace:PersonalServerManager.Views">
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
-                <ResourceDictionary Source="Presentation/Styles/Colors.xaml" />
-                <ResourceDictionary Source="Presentation/Styles/Controls.xaml" />
-                <ResourceDictionary Source="Presentation/Styles/GroupStatus.xaml" />
+                <ResourceDictionary Source="Views/Styles/Colors.xaml" />
+                <ResourceDictionary Source="Views/Styles/Controls.xaml" />
+                <ResourceDictionary Source="Views/Styles/GroupStatus.xaml" />
             </ResourceDictionary.MergedDictionaries>
             <DataTemplate DataType="{x:Type viewModels:DashboardViewModel}">
                 <views:DashboardView />
