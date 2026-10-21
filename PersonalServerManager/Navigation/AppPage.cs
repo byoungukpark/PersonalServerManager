@@ -6,6 +6,7 @@ public enum AppPage
     AwsConnection,
     GroupWorkspace,
     GroupDetail,
+    GroupManagement,
     History,
     Settings
 }

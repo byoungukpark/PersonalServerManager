@@ -161,6 +161,8 @@ public sealed class GroupWizardViewModel : ViewModelBase
     public bool CanMoveUp => SelectedOrder is not null && StartOrder.IndexOf(SelectedOrder) > 0;
     public bool CanMoveDown => SelectedOrder is not null && StartOrder.IndexOf(SelectedOrder) >= 0 && StartOrder.IndexOf(SelectedOrder) < StartOrder.Count - 1;
     public bool HasSelectedServices => IncludeEc2 || IncludeRds || IncludeS3;
+    // 스크롤 가능한 생성 화면에서는 조회 전 표의 빈 공간을 유지한다.
+    public double ResourceTableMinHeight => 280;
     public int SelectedResourceTabIndex { get => _selectedResourceTabIndex; set => SetProperty(ref _selectedResourceTabIndex, value); }
 
     public string GroupName { get => _groupName; set { if (SetProperty(ref _groupName, value)) _dirty = true; } }

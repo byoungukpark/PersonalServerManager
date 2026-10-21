@@ -20,7 +20,7 @@ public sealed record RegisteredResourceRow(string Kind, string Name, string Id, 
 public sealed record StartOrderRow(int Position, string Kind, string Name, string Id);
 
 /// <summary>등록된 그룹 구성·상태와 그룹/개별 자원 제어를 제공한다.</summary>
-public sealed class GroupDetailViewModel : ViewModelBase
+public sealed partial class GroupDetailViewModel : ViewModelBase
 {
     private readonly ServiceGroupService _groups;
     private readonly GroupStatusService _status;
@@ -45,16 +45,25 @@ public sealed class GroupDetailViewModel : ViewModelBase
     private string _errorMessage = string.Empty;
     private string _statusMessage = "AWS 상태 확인 전";
     private bool _hasAccessIssue;
+    private bool _isStatusRefreshing;
 
     public GroupDetailViewModel(NavigationService navigation, ServiceGroupService groups, GroupStatusService status,
-        IConfirmationService confirmation, ResourceControlService? control = null)
+        IConfirmationService confirmation, ResourceControlService? control = null,
+        AwsCloudWatchMetricQuery? metrics = null)
     {
         _navigation = navigation;
         _confirmation = confirmation;
         _groups = groups;
         _status = status;
         _control = control;
+        _metrics = metrics;
+        _metricRefreshCommand = new AsyncRelayCommand(RefreshMetricsAsync, CanRefreshMetrics, ShowMetricError);
+        _navigation.PropertyChanged += OnNavigationChanged;
         BackToDashboardCommand = new RelayCommand(_ => navigation.NavigateTo(AppPage.Dashboard));
+        OpenManagementCommand = new RelayCommand(_ =>
+        {
+            if (_groupId is { } id && CanOpenManagement) ManageGroupRequested?.Invoke(id);
+        });
         _refreshCommand = new AsyncRelayCommand(
             token => _groupId is { } id ? LoadAsync(id, token) : Task.CompletedTask,
             () => _groupId.HasValue && !IsLoading && !HasAccessIssue && !IsDeleting,
@@ -77,6 +86,7 @@ public sealed class GroupDetailViewModel : ViewModelBase
             _control.Activity.PropertyChanged += (_, _) =>
             {
                 OnPropertyChanged(nameof(IsControlRunning));
+                OnPropertyChanged(nameof(CanOpenManagement));
                 RefreshControlCommands();
                 _deleteCommand.RaiseCanExecuteChanged();
             };
@@ -84,6 +94,8 @@ public sealed class GroupDetailViewModel : ViewModelBase
     }
 
     public ICommand BackToDashboardCommand { get; }
+    public ICommand OpenManagementCommand { get; }
+    public event Action<Guid>? ManageGroupRequested;
     public ICommand GoToConnectionCommand { get; }
     public ICommand RefreshCommand => _refreshCommand;
     public ICommand DeleteCommand => _deleteCommand;
@@ -93,6 +105,7 @@ public sealed class GroupDetailViewModel : ViewModelBase
     public ICommand StartGroupCommand => _groupControlCommands[ResourceControlAction.Start];
     public ICommand StopGroupCommand => _groupControlCommands[ResourceControlAction.Stop];
     public bool IsControlRunning => _control?.Activity.IsControlRunning == true;
+    public bool CanOpenManagement => HasGroup && !IsLoading && !IsDeleting && !IsControlRunning;
     public bool IsControlSelection => SelectedResource is { Kind: "EC2" or "RDS" };
     public string SelectionMessage => SelectedResource is null ? "리소스를 선택하세요." :
         SelectedResource.Kind == "S3" ? "S3는 조회만 제공하며 시작·중지 대상이 아닙니다." :
@@ -102,10 +115,13 @@ public sealed class GroupDetailViewModel : ViewModelBase
         get => _selectedResource;
         set
         {
+            var previous = _selectedResource;
             if (!SetProperty(ref _selectedResource, value)) return;
             OnPropertyChanged(nameof(SelectionMessage));
             OnPropertyChanged(nameof(IsControlSelection));
             RefreshControlCommands();
+            if (previous?.Kind != value?.Kind || previous?.Id != value?.Id)
+                OnMetricSelectionChanged();
         }
     }
     public int SelectedServiceIndex
@@ -142,6 +158,7 @@ public sealed class GroupDetailViewModel : ViewModelBase
                 _deleteCommand.RaiseCanExecuteChanged();
                 _refreshCommand.RaiseCanExecuteChanged();
                 RefreshControlCommands();
+                OnPropertyChanged(nameof(CanOpenManagement));
             }
         }
     }
@@ -167,8 +184,26 @@ public sealed class GroupDetailViewModel : ViewModelBase
             {
                 _refreshCommand.RaiseCanExecuteChanged();
                 RefreshControlCommands();
+                OnPropertyChanged(nameof(CanOpenManagement));
             }
         }
+    }
+    public bool IsStatusRefreshing
+    {
+        get => _isStatusRefreshing;
+        private set => SetProperty(ref _isStatusRefreshing, value);
+    }
+
+    /// <summary>대시보드의 30초 조회 결과를 재요청 없이 열린 상세 표에 반영한다.</summary>
+    public void ApplySharedStatus(Guid groupId, GroupReadResult result)
+    {
+        if (_groupId != groupId || _group is null || IsDeleting || IsLoading) return;
+        ApplyStatusResult(result);
+    }
+
+    public void SetSharedStatusRefreshing(Guid groupId, bool isRefreshing)
+    {
+        if (_groupId == groupId) IsStatusRefreshing = !IsLoading && isRefreshing;
     }
 
     public IReadOnlyList<RegisteredResourceRow> Resources
@@ -207,6 +242,7 @@ public sealed class GroupDetailViewModel : ViewModelBase
             {
                 _refreshCommand.RaiseCanExecuteChanged();
                 RefreshControlCommands();
+                OnPropertyChanged(nameof(CanOpenManagement));
             }
         }
     }
@@ -230,9 +266,12 @@ public sealed class GroupDetailViewModel : ViewModelBase
         var sameGroup = _groupId == groupId;
         var previous = sameGroup ? Resources.ToDictionary(row => (row.Kind, row.Id)) : [];
         _groupId = groupId;
+        IsStatusRefreshing = false;
         var version = ++_loadVersion;
         if (!sameGroup)
         {
+            CancelMetricRefresh();
+            ClearMetrics();
             SetGroup(null);
             Resources = [];
             StartOrder = [];
@@ -305,6 +344,11 @@ public sealed class GroupDetailViewModel : ViewModelBase
         var result = await _status.ReadAsync(group, cancellationToken);
         if (version != _loadVersion) return;
 
+        ApplyStatusResult(result);
+    }
+
+    private void ApplyStatusResult(GroupReadResult result)
+    {
         if (result.AccessMessage is { } access)
         {
             HasAccessIssue = true;
@@ -352,6 +396,7 @@ public sealed class GroupDetailViewModel : ViewModelBase
         OnPropertyChanged(nameof(HasGroup));
         _deleteCommand.RaiseCanExecuteChanged();
         RefreshControlCommands();
+        OnPropertyChanged(nameof(CanOpenManagement));
     }
 
     /// <summary>확정한 로컬 그룹만 삭제하며 저장 성공 전에는 화면 구성을 유지한다.</summary>
@@ -373,6 +418,8 @@ public sealed class GroupDetailViewModel : ViewModelBase
             await _groups.DeleteAsync(group.Id, cancellationToken);
             // 삭제 전에 시작한 상태 조회가 나중에 도착해도 화면에 반영하지 않는다.
             _loadVersion++;
+            CancelMetricRefresh();
+            ClearMetrics();
             _groupId = null;
             SetGroup(null);
             Resources = [];

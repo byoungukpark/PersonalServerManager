@@ -1,5 +1,6 @@
 using PersonalServerManager.Services.Persistence;
 using PersonalServerManager.Models;
+using PersonalServerManager.Services.Aws;
 
 namespace PersonalServerManager.Services.Groups;
 
@@ -10,13 +11,15 @@ public sealed class ServiceGroupService
     private readonly TimeProvider _timeProvider;
     private readonly SemaphoreSlim _creationGate = new(1, 1);
     private readonly ControlActivityState? _controlActivity;
+    private readonly AwsConnectionService? _connection;
 
     public ServiceGroupService(IServiceGroupStore store, TimeProvider? timeProvider = null,
-        ControlActivityState? controlActivity = null)
+        ControlActivityState? controlActivity = null, AwsConnectionService? connection = null)
     {
         _store = store;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _controlActivity = controlActivity;
+        _connection = connection;
     }
 
     public Task<IReadOnlyList<ServiceGroup>> ListAsync(CancellationToken cancellationToken) =>
@@ -32,6 +35,40 @@ public sealed class ServiceGroupService
     }
 
     public event Action<Guid>? GroupDeleted;
+    public event Action<Guid>? GroupUpdated;
+
+    /// <summary>기존 ID·계정·리전을 유지하고 새 연결 자원의 계정을 확인한 뒤 로컬 구성만 교체한다.</summary>
+    public async Task<ServiceGroup> UpdateAsync(ServiceGroup original, string name,
+        IReadOnlyList<GroupResource> resources, IReadOnlyList<GroupResourceRef> startOrder,
+        long? confirmedConnectionVersion, CancellationToken cancellationToken)
+    {
+        if (_controlActivity?.IsControlRunning == true)
+            throw new ServiceGroupException("제어 작업 중에는 그룹을 편집할 수 없습니다.");
+        var resourceSnapshot = resources.Select(resource => resource with
+        {
+            Region = resource.Kind == AwsResourceKind.S3 ? resource.Region : original.Region,
+            Name = string.IsNullOrWhiteSpace(resource.Name) ? resource.Id : resource.Name
+        }).ToArray();
+        var added = resourceSnapshot.Any(resource => !original.Resources.Any(old =>
+            old.Kind == resource.Kind && string.Equals(old.Id, resource.Id, StringComparison.OrdinalIgnoreCase)));
+        if (added && (_connection?.IsConnected != true ||
+            _connection.ActiveConnection?.AccountId != original.AccountId ||
+            _connection.ActiveConnection.ConnectionVersion != confirmedConnectionVersion))
+            throw new ServiceGroupException("새 자원을 연결하려면 해당 그룹의 AWS 계정으로 다시 연결하세요.");
+
+        var now = _timeProvider.GetUtcNow();
+        var updated = original with
+        {
+            Name = GroupRules.NormalizeName(name),
+            UpdatedAt = now > original.UpdatedAt ? now : original.UpdatedAt.AddTicks(1),
+            Resources = resourceSnapshot,
+            StartOrder = startOrder.ToArray()
+        };
+        GroupRules.Validate(updated);
+        await _store.ReplaceGroupAsync(updated, original.UpdatedAt, cancellationToken);
+        GroupUpdated?.Invoke(updated.Id);
+        return updated;
+    }
 
     public async Task<ServiceGroup> CreateAsync(
         string name,

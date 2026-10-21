@@ -204,6 +204,8 @@ public sealed class DashboardViewModel : ViewModelBase
     }
 
     public event Action<Guid>? OpenGroupRequested;
+    public event Action<Guid, GroupReadResult>? GroupStatusRead;
+    public event Action<Guid, bool>? GroupStatusRefreshChanged;
     public ObservableCollection<ServiceGroupCard> Groups { get; } = [];
     public ICommand CreateGroupCommand { get; }
     public ICommand OpenGroupCommand { get; }
@@ -313,12 +315,21 @@ public sealed class DashboardViewModel : ViewModelBase
     {
         if (!Groups.Contains(card)) return;
         card.IsRefreshing = true;
+        GroupStatusRefreshChanged?.Invoke(card.Id, true);
         try
         {
             var result = await _status.ReadAsync(card.Group, cancellationToken);
-            if (Groups.Contains(card)) card.Apply(result);
+            if (Groups.Contains(card))
+            {
+                card.Apply(result);
+                GroupStatusRead?.Invoke(card.Id, result);
+            }
         }
-        finally { card.IsRefreshing = false; }
+        finally
+        {
+            card.IsRefreshing = false;
+            GroupStatusRefreshChanged?.Invoke(card.Id, false);
+        }
     }
 
     /// <summary>저장 성공 후 카드와 그 카드의 상태를 제거하고 이전 목록 응답을 무효화한다.</summary>

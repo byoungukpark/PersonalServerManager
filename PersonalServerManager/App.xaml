@@ -22,6 +22,9 @@
             <DataTemplate DataType="{x:Type viewModels:GroupDetailViewModel}">
                 <views:GroupDetailView />
             </DataTemplate>
+            <DataTemplate DataType="{x:Type viewModels:GroupManagementViewModel}">
+                <views:GroupManagementView />
+            </DataTemplate>
             <DataTemplate DataType="{x:Type viewModels:PlaceholderViewModel}">
                 <views:PlaceholderView />
             </DataTemplate>

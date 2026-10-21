@@ -233,4 +233,114 @@
         <Setter Property="RowStyle" Value="{StaticResource ResourceDataGridRowStyle}" />
         <Setter Property="CellStyle" Value="{StaticResource ResourceDataGridCellStyle}" />
     </Style>
+    <!-- 상태 문구가 길어져도 다음 열에 가리지 않도록 줄바꿈한다. -->
+    <Style x:Key="ResourceStatusTextStyle" TargetType="{x:Type TextBlock}">
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <!-- 그룹 생성과 그룹 편집이 같은 조회/선택 표를 사용한다. -->
+    <BooleanToVisibilityConverter x:Key="ResourceBoolVisibility" />
+    <DataTemplate x:Key="SharedResourceSelectionTemplate">
+        <TabControl Style="{StaticResource ResourceTabControlStyle}"
+                    SelectedIndex="{Binding SelectedResourceTabIndex, Mode=TwoWay}">
+            <TabItem Header="EC2" Visibility="{Binding IncludeEc2, Converter={StaticResource ResourceBoolVisibility}}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <DockPanel Margin="0,0,0,13">
+                        <Button Content="EC2 목록 조회" DockPanel.Dock="Right" Style="{StaticResource WizardPrimaryButtonStyle}"
+                                Command="{Binding QueryEc2Command}" />
+                        <TextBlock Text="{Binding Ec2Status}" VerticalAlignment="Center"
+                                   Foreground="{StaticResource SecondaryTextBrush}" />
+                    </DockPanel>
+                    <DataGrid Grid.Row="1" ItemsSource="{Binding Ec2Choices}" Style="{StaticResource ResourceDataGridStyle}"
+                              AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False"
+                              MinHeight="{Binding ResourceTableMinHeight}" MaxHeight="420" EnableRowVirtualization="True">
+                        <DataGrid.Columns>
+                            <DataGridTemplateColumn Header="선택" Width="70">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate><CheckBox Style="{StaticResource ResourceSelectionCheckBoxStyle}"
+                                                            IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                            IsEnabled="{Binding CanSelect}" ToolTip="{Binding RegistrationText}"
+                                                            HorizontalAlignment="Center" /></DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="이름" Binding="{Binding Name}" Width="180" />
+                            <DataGridTextColumn Header="Instance ID" Binding="{Binding Id}" Width="190" />
+                            <DataGridTextColumn Header="유형" Binding="{Binding Detail}" Width="100" />
+                            <DataGridTextColumn Header="상태" Binding="{Binding State}" Width="205"
+                                                ElementStyle="{StaticResource ResourceStatusTextStyle}" />
+                            <DataGridTextColumn Header="등록 정보" Binding="{Binding RegistrationText}" Width="160" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </TabItem>
+            <TabItem Header="RDS" Visibility="{Binding IncludeRds, Converter={StaticResource ResourceBoolVisibility}}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <DockPanel Margin="0,0,0,13">
+                        <Button Content="RDS 목록 조회" DockPanel.Dock="Right" Style="{StaticResource WizardPrimaryButtonStyle}"
+                                Command="{Binding QueryRdsCommand}" />
+                        <TextBlock Text="{Binding RdsStatus}" VerticalAlignment="Center"
+                                   Foreground="{StaticResource SecondaryTextBrush}" />
+                    </DockPanel>
+                    <DataGrid Grid.Row="1" ItemsSource="{Binding RdsChoices}" Style="{StaticResource ResourceDataGridStyle}"
+                              AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False"
+                              MinHeight="{Binding ResourceTableMinHeight}" MaxHeight="420" EnableRowVirtualization="True">
+                        <DataGrid.Columns>
+                            <DataGridTemplateColumn Header="선택" Width="70">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate><CheckBox Style="{StaticResource ResourceSelectionCheckBoxStyle}"
+                                                            IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                            IsEnabled="{Binding CanSelect}" ToolTip="{Binding RegistrationText}"
+                                                            HorizontalAlignment="Center" /></DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="DB Identifier" Binding="{Binding Id}" Width="280" />
+                            <DataGridTextColumn Header="엔진" Binding="{Binding Detail}" Width="130" />
+                            <DataGridTextColumn Header="상태" Binding="{Binding State}" Width="205"
+                                                ElementStyle="{StaticResource ResourceStatusTextStyle}" />
+                            <DataGridTextColumn Header="등록 정보" Binding="{Binding RegistrationText}" Width="180" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </TabItem>
+            <TabItem Header="S3" Visibility="{Binding IncludeS3, Converter={StaticResource ResourceBoolVisibility}}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <DockPanel Margin="0,0,0,13">
+                        <Button Content="S3 버킷 조회" DockPanel.Dock="Right" Style="{StaticResource WizardPrimaryButtonStyle}"
+                                Command="{Binding QueryS3Command}" />
+                        <TextBlock Text="{Binding S3Status}" VerticalAlignment="Center"
+                                   Foreground="{StaticResource SecondaryTextBrush}" />
+                    </DockPanel>
+                    <DataGrid Grid.Row="1" ItemsSource="{Binding S3Choices}" Style="{StaticResource ResourceDataGridStyle}"
+                              AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False"
+                              MinHeight="{Binding ResourceTableMinHeight}" MaxHeight="420" EnableRowVirtualization="True">
+                        <DataGrid.Columns>
+                            <DataGridTemplateColumn Header="선택" Width="70">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate><CheckBox Style="{StaticResource ResourceSelectionCheckBoxStyle}"
+                                                            IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                            IsEnabled="{Binding CanSelect}" ToolTip="{Binding RegistrationText}"
+                                                            HorizontalAlignment="Center" /></DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="버킷" Binding="{Binding Name}" Width="470" />
+                            <DataGridTextColumn Header="버킷 리전" Binding="{Binding Region}" Width="180" />
+                            <DataGridTextColumn Header="등록 정보" Binding="{Binding RegistrationText}" Width="220" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </TabItem>
+        </TabControl>
+    </DataTemplate>
 </ResourceDictionary>

@@ -26,10 +26,14 @@ var checks = new List<(string Name, Func<Task> Run)>
     ("제어 확인 취소·연결 변경·화면 이동", ControlViewModelAsync),
     ("그룹 순차 시작·역순 중지·목표 상태 건너뛰기", GroupSequenceAsync),
     ("그룹 실패·시간 초과·남은 작업 취소", GroupInterruptionAsync),
-    ("대시보드·그룹 상세 WPF 화면 생성", WpfViewsAsync)
+    ("그룹 편집 확인·자원 누락·저장 복원", GroupEditingPersistenceAsync),
+    ("그룹 편집 중복·계정·저장 실패 차단", GroupEditingGuardsAsync),
+    ("대시보드·그룹 상세 WPF 화면 생성", WpfViewsAsync),
+    ("CloudWatch 지표 게이트·선택 변경·시간 범위", MetricMonitoringAsync),
+    ("30초 상태 결과 상세 화면 공유", SharedStatusAsync)
 };
 
-foreach (var (name, run) in checks)
+foreach (var (name, run) in checks.Where(check => args.Length == 0 || check.Name.Contains(args[0], StringComparison.OrdinalIgnoreCase)))
 {
     await run();
     Console.WriteLine($"PASS {name}");
@@ -255,6 +259,124 @@ static async Task GroupInterruptionAsync()
         "빈 그룹에 AWS 명령을 보냄");
 }
 
+static async Task GroupEditingPersistenceAsync()
+{
+    var directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"psm-edit-{Guid.NewGuid():N}");
+    var path = System.IO.Path.Combine(directory, "settings.json");
+    try
+    {
+        var store = new JsonAppSettingsStore(path);
+        var sample = Group();
+        var original = sample with
+        {
+            Resources = sample.Resources.Select(resource => resource.Kind == AwsResourceKind.S3
+                ? resource : resource with { Region = sample.Region }).ToArray()
+        };
+        await store.SaveAsync("first", default);
+        await store.AddGroupAsync(original, default);
+        var activity = new ControlActivityState();
+        var factory = new FakeSessionFactory();
+        var connection = new AwsConnectionService(new FakeProfiles(), factory, activity);
+        await connection.ConnectAsync("first", default);
+        var groups = new ServiceGroupService(store, controlActivity: activity, connection: connection);
+        var query = new FakeQuery
+        {
+            Ec2 = (_, _) => Task.FromResult<IReadOnlyList<Ec2InstanceResource>>(
+                [new("i-2", "새 서버", "t3.micro", "stopped")])
+        };
+        var confirmation = new FakeConfirmation { Result = false };
+        var edit = new GroupManagementViewModel(groups, connection, query, confirmation);
+        await edit.LoadAsync(original.Id);
+        await edit.QueryResourcesAsync(AwsResourceKind.Ec2);
+        Check(edit.Ec2Choices.Single(item => item.Id == "i-1").IsSelected &&
+            edit.Ec2Choices.Single(item => item.Id == "i-1").State.Contains("찾을 수 없음"),
+            "AWS 목록에서 빠진 등록 자원을 자동 연결 해제함");
+        edit.Name = "새 그룹 이름";
+        edit.S3Choices.Single().IsSelected = false;
+        edit.Ec2Choices.Single(item => item.Id == "i-2").IsSelected = true;
+        edit.MoveOrder(edit.StartOrder.Single(item => item.Id == "i-2"),
+            edit.StartOrder.Single(item => item.Id == "db-1"));
+        Check(edit.HasChanges && !await edit.ConfirmLeaveAsync(), "미저장 이탈 확인 누락");
+        await edit.SaveAsync();
+        Check((await store.LoadGroupsAsync(default)).Single().Name == original.Name,
+            "저장 확인 취소 후 JSON 변경");
+        confirmation.Result = true;
+        await edit.SaveAsync();
+        var saved = (await new JsonAppSettingsStore(path).LoadGroupsAsync(default)).Single();
+        Check(saved.Id == original.Id && saved.AccountId == original.AccountId &&
+            saved.Region == original.Region && saved.Name == "새 그룹 이름" &&
+            saved.Resources.Any(item => item.Id == "i-1") &&
+            saved.Resources.Any(item => item.Id == "i-2") &&
+            saved.Resources.All(item => item.Kind != AwsResourceKind.S3) &&
+            saved.StartOrder.Select(item => item.Id).SequenceEqual(["i-1", "i-2", "db-1"]) &&
+            await new JsonAppSettingsStore(path).LoadAsync(default) == "first" &&
+            factory.LastSession!.Sent == 0 && !edit.HasChanges,
+            "그룹 편집 저장·복원 또는 AWS 비제어 보장 실패");
+    }
+    finally
+    {
+        if (System.IO.Directory.Exists(directory)) System.IO.Directory.Delete(directory, true);
+    }
+}
+
+static async Task GroupEditingGuardsAsync()
+{
+    var activity = new ControlActivityState();
+    var factory = new FakeSessionFactory();
+    var connection = new AwsConnectionService(new FakeProfiles(), factory, activity);
+    await connection.ConnectAsync("first", default);
+    var original = Group();
+    var other = Group() with
+    {
+        Name = "다른 그룹",
+        Resources = [new GroupResource(AwsResourceKind.Ec2, "i-other", "다른 서버", "ap-northeast-2")],
+        StartOrder = [new GroupResourceRef(AwsResourceKind.Ec2, "i-other")]
+    };
+    var store = new FakeGroupStore { Groups = [original, other] };
+    var groups = new ServiceGroupService(store, controlActivity: activity, connection: connection);
+    try
+    {
+        await groups.UpdateAsync(original, other.Name, original.Resources, original.StartOrder, null, default);
+        throw new Exception("중복 그룹 이름 저장 허용");
+    }
+    catch (ServiceGroupException) { }
+    try
+    {
+        await groups.UpdateAsync(original, "새 이름", [.. original.Resources, other.Resources[0]],
+            [.. original.StartOrder, other.StartOrder[0]], connection.ActiveConnection!.ConnectionVersion, default);
+        throw new Exception("다른 그룹 자원 중복 연결 허용");
+    }
+    catch (ServiceGroupException) { }
+    await connection.ConnectAsync("other", default);
+    try
+    {
+        await groups.UpdateAsync(original, "새 이름",
+            [.. original.Resources, new GroupResource(AwsResourceKind.Ec2, "i-2", "새 서버", original.Region)],
+            [.. original.StartOrder, new GroupResourceRef(AwsResourceKind.Ec2, "i-2")],
+            connection.ActiveConnection!.ConnectionVersion, default);
+        throw new Exception("다른 계정으로 새 자원 연결 허용");
+    }
+    catch (ServiceGroupException) { }
+
+    store.FailReplace = true;
+    try
+    {
+        await groups.UpdateAsync(original, "저장 실패 이름", original.Resources, original.StartOrder, null, default);
+        throw new Exception("저장 실패를 성공으로 표시");
+    }
+    catch (AppSettingsException) { }
+    Check(store.Groups[0].Name == original.Name, "저장 실패 후 기존 그룹 훼손");
+    store.FailReplace = false;
+    var changed = await groups.UpdateAsync(original, "변경 완료", original.Resources, original.StartOrder, null, default);
+    try
+    {
+        await groups.UpdateAsync(original, "오래된 초안", original.Resources, original.StartOrder, null, default);
+        throw new Exception("오래된 그룹 초안으로 최신 저장 덮어씀");
+    }
+    catch (ServiceGroupException) { }
+    Check(store.Groups[0] == changed && factory.LastSession!.Sent == 0, "편집 충돌 또는 AWS 비제어 오류");
+}
+
 static async Task<(AwsConnectionService Connection, FakeSession Session, ServiceGroup Group,
     FakeGroupStore Store, ServiceGroupService Groups, ResourceControlService Control,
     ControlActivityState Activity, ManualControlClock Clock, long Version)> ControlFixtureAsync()
@@ -383,6 +505,146 @@ static ServiceGroup Group(string account = "111111111111") => new(
      new GroupResource(AwsResourceKind.S3, "bucket-1", "버킷", "us-east-1")],
     [new GroupResourceRef(AwsResourceKind.Ec2, "i-1"),
      new GroupResourceRef(AwsResourceKind.Rds, "db-1")]);
+
+static async Task MetricMonitoringAsync()
+{
+    var activity = new ControlActivityState();
+    var factory = new FakeSessionFactory();
+    var connection = new AwsConnectionService(new FakeProfiles(), factory, activity);
+    await connection.ConnectAsync("first", default);
+    var session = factory.LastSession!;
+    var group = Group();
+    var query = new AwsCloudWatchMetricQuery(connection);
+    var calls = 0;
+    TimeSpan lastRange = default;
+    string? lastRegion = null;
+    session.Metrics = (resource, range, _) =>
+    {
+        calls++;
+        lastRange = range;
+        lastRegion = resource.Region;
+        return Task.FromResult(MetricSample(resource.Kind));
+    };
+
+    try
+    {
+        await query.ReadAsync(group with { AccountId = "222222222222" }, group.Resources[0], TimeSpan.FromHours(1), default);
+        throw new Exception("다른 계정의 CloudWatch 조회를 허용함");
+    }
+    catch (AwsConnectionException) { }
+    Check(calls == 0, "계정 게이트 앞에서 AWS 지표 요청");
+
+    var navigation = new NavigationService();
+    var groups = new ServiceGroupService(new FakeGroupStore { Groups = [group] });
+    var status = new GroupStatusService(connection, new FakeQuery());
+    var detail = new GroupDetailViewModel(navigation, groups, status, new FakeConfirmation(), null, query);
+    navigation.Register(AppPage.GroupDetail, detail);
+    navigation.NavigateTo(AppPage.GroupDetail);
+    await detail.LoadAsync(group.Id);
+    detail.SelectedResource = detail.Resources.Single(row => row.Kind == "EC2");
+    detail.SelectedDetailTabIndex = 1;
+    await UntilAsync(() => detail.MetricCharts.Count == 2);
+    Check(calls == 1 && lastRange == TimeSpan.FromHours(1) && lastRegion == group.Region,
+        "선택 자원·기본 범위·그룹 리전 조회 오류");
+    Check(detail.MetricCharts[0].LatestText.Contains("35") && detail.MetricCharts[1].HasData,
+        "최신 지표 또는 그래프 데이터가 표시되지 않음");
+    Check(detail.MetricCharts[0].LatestText.Contains('%') &&
+          detail.MetricCharts[0].MeasuredAtText.Contains("AWS 측정 시각"), "단위·측정 시각 누락");
+
+    detail.SelectedMetricRange = detail.MetricRanges[1];
+    await UntilAsync(() => calls == 2 && !detail.IsMetricsLoading);
+    Check(lastRange == TimeSpan.FromHours(3), "시간 범위 변경 뒤 재조회하지 않음");
+
+    var delayed = new TaskCompletionSource<IReadOnlyList<MetricSeries>>(TaskCreationOptions.RunContinuationsAsynchronously);
+    session.Metrics = (resource, _, _) => resource.Kind == AwsResourceKind.Ec2
+        ? delayed.Task : Task.FromResult(MetricSample(resource.Kind));
+    detail.SelectedMetricRange = detail.MetricRanges[2];
+    await UntilAsync(() => detail.IsMetricsLoading);
+    detail.SelectedServiceIndex = 1;
+    detail.SelectedResource = detail.Resources.Single(row => row.Kind == "RDS");
+    await UntilAsync(() => detail.MetricCharts.Count == 2 && detail.MetricCharts[1].Title == "DB 연결 수");
+    delayed.SetResult(MetricSample(AwsResourceKind.Ec2));
+    await Task.Yield();
+    Check(detail.MetricCharts[1].Title == "DB 연결 수", "이전 선택 자원의 늦은 응답이 화면을 덮음");
+
+    session.Metrics = (_, _, _) => Task.FromResult<IReadOnlyList<MetricSeries>>(
+        [new("cpu", "CPU 사용률", "%", []), new("connections", "DB 연결 수", "개", [])]);
+    await detail.RefreshMetricsAsync();
+    Check(detail.MetricCharts.All(card => !card.HasData && card.LatestText == "데이터 없음"),
+        "빈 지표를 0으로 표시함");
+
+    session.Metrics = (_, _, _) => Task.FromResult(MetricSample(AwsResourceKind.Rds));
+    await detail.RefreshMetricsAsync();
+    session.Metrics = (_, _, _) => Task.FromException<IReadOnlyList<MetricSeries>>(
+        new AwsResourceQueryException(AwsQueryFailureKind.AccessDenied, "CloudWatch 조회 권한 없음"));
+    await detail.RefreshMetricsAsync();
+    Check(detail.HasMetricError && detail.MetricCharts[1].HasData &&
+          detail.MetricStatusMessage.Contains("이전 측정값"), "권한 오류에서 이전 정상값을 보존하지 않음");
+
+    var s3Calls = 0;
+    session.Metrics = (resource, _, _) =>
+    {
+        if (resource.Kind == AwsResourceKind.S3) s3Calls++;
+        return Task.FromResult(MetricSample(resource.Kind));
+    };
+    detail.SelectedServiceIndex = 2;
+    detail.SelectedResource = detail.Resources.Single(row => row.Kind == "S3");
+    await UntilAsync(() => detail.MetricCharts.Count == 2 && detail.MetricCharts[1].Title == "객체 수");
+    detail.SelectedServiceIndex = 0;
+    detail.SelectedResource = detail.Resources.Single(row => row.Kind == "EC2");
+    await UntilAsync(() => detail.MetricCharts.Count == 2 && detail.MetricCharts[0].Title == "CPU 사용률");
+    detail.SelectedServiceIndex = 2;
+    detail.SelectedResource = detail.Resources.Single(row => row.Kind == "S3");
+    Check(s3Calls == 1 && detail.MetricCharts[1].Title == "객체 수", "S3 일 단위 캐시 재사용 실패");
+    detail.CancelMetricRefresh();
+}
+
+static IReadOnlyList<MetricSeries> MetricSample(AwsResourceKind kind)
+{
+    var at = DateTimeOffset.UtcNow.AddMinutes(-2);
+    var cpu = new MetricSeries("cpu", "CPU 사용률", "%", [new MetricPoint(at, 35)]);
+    if (kind == AwsResourceKind.S3)
+        return [new MetricSeries("storage", "저장량", "B", [new MetricPoint(at.AddDays(-1), 8192)]),
+            new MetricSeries("objects", "객체 수", "개", [new MetricPoint(at.AddDays(-1), 6)])];
+    return kind == AwsResourceKind.Ec2
+        ? [cpu,
+            new MetricSeries("networkIn", "네트워크 수신", "B", [new MetricPoint(at, 4096)]),
+            new MetricSeries("networkOut", "네트워크 송신", "B", [new MetricPoint(at, 2048)])]
+        : [cpu, new MetricSeries("connections", "DB 연결 수", "개", [new MetricPoint(at, 4)])];
+}
+
+static async Task SharedStatusAsync()
+{
+    var group = Group();
+    var factory = new FakeSessionFactory();
+    var connection = new AwsConnectionService(new FakeProfiles(), factory, new ControlActivityState());
+    await connection.ConnectAsync("first", default);
+    var state = "running";
+    var query = new FakeQuery
+    {
+        Ec2 = (_, _) => Task.FromResult<IReadOnlyList<Ec2InstanceResource>>(
+            [new Ec2InstanceResource("i-1", "웹", "t3.micro", state)])
+    };
+    var status = new GroupStatusService(connection, query);
+    var groups = new ServiceGroupService(new FakeGroupStore { Groups = [group] });
+    var navigation = new NavigationService();
+    var detail = new GroupDetailViewModel(navigation, groups, status, new FakeConfirmation());
+    var dashboard = new DashboardViewModel(navigation, groups, status);
+    dashboard.GroupStatusRead += detail.ApplySharedStatus;
+    dashboard.GroupStatusRefreshChanged += detail.SetSharedStatusRefreshing;
+    navigation.Register(AppPage.GroupDetail, detail);
+    navigation.NavigateTo(AppPage.GroupDetail);
+    await detail.LoadAsync(group.Id);
+    await dashboard.LoadAsync();
+    Check(detail.Resources.Single(row => row.Kind == "EC2").Status == "running", "초기 상세 상태 오류");
+
+    state = "stopped";
+    var before = query.Calls;
+    await dashboard.RefreshStatusesAsync();
+    Check(detail.Resources.Single(row => row.Kind == "EC2").Status == "stopped" &&
+          query.Calls - before == 3 && !detail.IsStatusRefreshing,
+        "대시보드의 1회 조회 결과를 상세에 공유하지 못함");
+}
 
 static AwsConnectionService Connection() => new(new FakeProfiles(), new FakeSessionFactory(), new ControlActivityState());
 
@@ -608,36 +870,60 @@ static Task WpfViewsAsync()
             var group = Group();
             var groups = new ServiceGroupService(new FakeGroupStore { Groups = [group] });
             var activity = new ControlActivityState();
-            var connection = new AwsConnectionService(new FakeProfiles(), new FakeSessionFactory(), activity);
+            var factory = new FakeSessionFactory();
+            var connection = new AwsConnectionService(new FakeProfiles(), factory, activity);
             connection.ConnectAsync("first", default).GetAwaiter().GetResult();
+            factory.LastSession!.Metrics = (resource, _, _) => Task.FromResult(MetricSample(resource.Kind));
             var query = new FakeQuery
             {
                 Ec2 = (_, _) => Task.FromResult<IReadOnlyList<Ec2InstanceResource>>([new("i-1", "웹 서버", "t3.micro", "stopped")])
             };
             var status = new GroupStatusService(connection, query);
             var control = new ResourceControlService(connection, groups, activity, () => new ControlTimeoutSettings());
-            var detail = new GroupDetailViewModel(navigation, groups, status, new FakeConfirmation(), control);
+            var detail = new GroupDetailViewModel(navigation, groups, status, new FakeConfirmation(), control,
+                new AwsCloudWatchMetricQuery(connection));
+            navigation.Register(AppPage.GroupDetail, detail);
+            navigation.NavigateTo(AppPage.GroupDetail);
+            var management = new GroupManagementViewModel(groups, connection, query, new FakeConfirmation());
             detail.LoadAsync(group.Id).GetAwaiter().GetResult();
+            management.LoadAsync(group.Id).GetAwaiter().GetResult();
             detail.SelectedResource = detail.Resources.First(row => row.Kind == "EC2");
+            detail.SelectedDetailTabIndex = 1;
             var settings = new SettingsViewModel(new JsonAppSettingsStore(), new FakeConfirmation(), new ControlTimeoutSettings());
             foreach (var view in new System.Windows.Controls.UserControl[]
-                     { new DashboardView(), new GroupDetailView { DataContext = detail }, new SettingsView { DataContext = settings } })
+                     { new DashboardView(), new GroupDetailView { DataContext = detail },
+                       new GroupManagementView { DataContext = management }, new SettingsView { DataContext = settings } })
             {
-                view.Measure(new System.Windows.Size(1280, 1100));
-                view.Arrange(new System.Windows.Rect(0, 0, 1280, 1100));
-                view.UpdateLayout();
-                view.Measure(new System.Windows.Size(1280, 1100));
-                view.Arrange(new System.Windows.Rect(0, 0, 1280, 1100));
-                view.UpdateLayout();
-                if (view is GroupDetailView or SettingsView)
+                if (view is GroupManagementView)
                 {
-                    var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(1280, 1100, 96, 96,
+                    // 문제가 발생한 RDS 관리 표를 첫 배치부터 열어 상태 열을 렌더링한다.
+                    management.SelectedResourceTabIndex = 1;
+                    var tabs = ((System.Windows.Controls.Grid)view.Content).Children
+                        .OfType<System.Windows.Controls.TabControl>().Single();
+                    tabs.SelectedIndex = 1;
+                }
+                var width = view is GroupManagementView ? 1100 : 1280;
+                var height = view is GroupManagementView ? 560 : view is GroupDetailView ? 1800 : 1100;
+                view.Measure(new System.Windows.Size(width, height));
+                view.Arrange(new System.Windows.Rect(0, 0, width, height));
+                view.UpdateLayout();
+                view.Measure(new System.Windows.Size(width, height));
+                view.Arrange(new System.Windows.Rect(0, 0, width, height));
+                view.UpdateLayout();
+                if (view is GroupDetailView or GroupManagementView or SettingsView)
+                {
+                    var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(width, height, 96, 96,
                         System.Windows.Media.PixelFormats.Pbgra32);
                     bitmap.Render(view);
                     var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
                     encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
                     using var image = System.IO.File.Create(System.IO.Path.Combine(AppContext.BaseDirectory, $"{view.GetType().Name}-preview.png"));
                     encoder.Save(image);
+                }
+                if (view is GroupManagementView)
+                {
+                    Check(view.FindResource("SharedResourceSelectionTemplate") is System.Windows.DataTemplate,
+                        "그룹 생성·편집 공통 리소스 선택 표가 로드되지 않았습니다.");
                 }
             }
             completion.SetResult();
@@ -720,8 +1006,12 @@ sealed class FakeSessionFactory : IAwsProfileSessionFactory
     }
 }
 
-sealed class FakeSession(string profileName) : IAwsProfileSession, IAwsResourceControlSession
+sealed class FakeSession(string profileName) : IAwsProfileSession, IAwsResourceControlSession, IAwsCloudWatchSession
 {
+    public Func<GroupResource, TimeSpan, CancellationToken, Task<IReadOnlyList<MetricSeries>>> Metrics { get; set; } =
+        (_, _, _) => Task.FromResult<IReadOnlyList<MetricSeries>>([]);
+    public Task<IReadOnlyList<MetricSeries>> ReadMetricsAsync(GroupResource resource, TimeSpan range, CancellationToken token) =>
+        Metrics(resource, range, token);
     public int Sent { get; private set; }
     public List<(AwsResourceKind Kind, string Id, ResourceControlAction Action)> SentCommands { get; } = [];
     public Func<string, AwsResourceKind, string, CancellationToken, Task<ResourceControlSnapshot>> ControlState { get; set; } =
@@ -772,9 +1062,21 @@ sealed class FakeGroupStore : IServiceGroupStore
 {
     public List<ServiceGroup> Groups { get; set; } = [];
     public bool FailDelete { get; set; }
+    public bool FailReplace { get; set; }
     public Task<IReadOnlyList<ServiceGroup>> LoadGroupsAsync(CancellationToken cancellationToken) =>
         Task.FromResult<IReadOnlyList<ServiceGroup>>(Groups.ToArray());
     public Task AddGroupAsync(ServiceGroup group, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task ReplaceGroupAsync(ServiceGroup group, DateTimeOffset expectedUpdatedAt, CancellationToken cancellationToken)
+    {
+        if (FailReplace) throw new AppSettingsException("테스트 저장 실패");
+        var index = Groups.FindIndex(item => item.Id == group.Id);
+        if (index < 0 || Groups[index].UpdatedAt != expectedUpdatedAt)
+            throw new ServiceGroupException("다른 변경이 먼저 저장되었습니다.");
+        GroupRules.Validate(group);
+        GroupRules.EnsureUnique(group, Groups.Where(item => item.Id != group.Id));
+        Groups[index] = group;
+        return Task.CompletedTask;
+    }
     public Task DeleteGroupAsync(Guid groupId, CancellationToken cancellationToken)
     {
         if (FailDelete) throw new AppSettingsException("테스트 저장 실패");

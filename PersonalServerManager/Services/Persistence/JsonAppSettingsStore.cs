@@ -161,6 +161,40 @@ public sealed class JsonAppSettingsStore : ISelectedProfileStore, IServiceGroupS
         }
     }
 
+    /// <summary>파일 잠금 안에서 기존 버전과 중복을 다시 확인한 뒤 한 그룹만 교체한다.</summary>
+    public async Task ReplaceGroupAsync(ServiceGroup group, DateTimeOffset expectedUpdatedAt,
+        CancellationToken cancellationToken)
+    {
+        GroupRules.Validate(group);
+        await FileGate.WaitAsync(cancellationToken);
+        try
+        {
+            var root = await ReadRootAsync(cancellationToken)
+                ?? throw new ServiceGroupException("편집할 서비스 그룹을 찾을 수 없습니다.");
+            var groups = ReadGroups(root);
+            var index = groups.ToList().FindIndex(item => item.Id == group.Id);
+            if (index < 0) throw new ServiceGroupException("편집할 서비스 그룹을 찾을 수 없습니다.");
+            var existing = groups[index];
+            if (existing.UpdatedAt != expectedUpdatedAt)
+                throw new ServiceGroupException("다른 변경이 먼저 저장되었습니다. 그룹을 다시 열어 확인하세요.");
+            if (existing.AccountId != group.AccountId || existing.Region != group.Region ||
+                existing.ProfileName != group.ProfileName || existing.CreatedAt != group.CreatedAt)
+                throw new ServiceGroupException("그룹의 계정, 리전, 등록 프로필은 편집할 수 없습니다.");
+            GroupRules.EnsureUnique(group, groups.Where(item => item.Id != group.Id));
+
+            // 다른 그룹과 앱 설정의 JSON 노드는 건드리지 않고 기존 원자적 파일 교체를 사용한다.
+            ((JsonArray)root["groups"]!)[index] = JsonSerializer.SerializeToNode(group, JsonOptions);
+            await WriteAtomicallyAsync(root, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception exception) when (exception is AppSettingsException or ServiceGroupException) { throw; }
+        catch (Exception)
+        {
+            throw new AppSettingsException("서비스 그룹 변경을 저장하지 못했습니다. 설정 파일을 확인해 주세요.");
+        }
+        finally { FileGate.Release(); }
+    }
+
     /// <summary>파일 잠금 안에서 대상만 제거하고 기존 원자적 저장 경로를 사용한다.</summary>
     public async Task DeleteGroupAsync(Guid groupId, CancellationToken cancellationToken)
     {

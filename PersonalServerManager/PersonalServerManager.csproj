@@ -13,6 +13,8 @@
     <PackageReference Include="AWSSDK.RDS" Version="4.0.102" />
     <PackageReference Include="AWSSDK.S3" Version="4.0.101.2" />
     <PackageReference Include="AWSSDK.SecurityToken" Version="4.0.101.2" />
+    <PackageReference Include="AWSSDK.CloudWatch" Version="4.0.105" />
+    <PackageReference Include="OxyPlot.Wpf" Version="2.2.0" />
   </ItemGroup>
 
 </Project>

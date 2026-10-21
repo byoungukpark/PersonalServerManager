@@ -14,14 +14,17 @@ public sealed class ShellViewModel : ViewModelBase
     private readonly NavigationService _navigation;
     private readonly AwsConnectionService _connection;
     private readonly GroupWizardViewModel _wizard;
+    private readonly GroupManagementViewModel _management;
     private readonly AsyncRelayCommand _cancelRemainingCommand;
 
     public ShellViewModel(NavigationService navigation, AwsConnectionService connection, GroupWizardViewModel wizard,
-        ControlActivityState controlActivity, IConfirmationService confirmation)
+        ControlActivityState controlActivity, IConfirmationService confirmation,
+        GroupManagementViewModel management)
     {
         _navigation = navigation;
         _connection = connection;
         _wizard = wizard;
+        _management = management;
         ControlActivity = controlActivity;
         _cancelRemainingCommand = new AsyncRelayCommand(async token =>
         {
@@ -52,11 +55,18 @@ public sealed class ShellViewModel : ViewModelBase
                     }
                     _wizard.Reset();
                 }
+                if (_navigation.CurrentPage == AppPage.GroupManagement && page != AppPage.GroupManagement &&
+                    !await _management.ConfirmLeaveAsync())
+                {
+                    NotifyNavigationSelection();
+                    return;
+                }
                 _navigation.NavigateTo(page);
             }
             catch (Exception)
             {
                 _wizard.ReportNavigationError();
+                _management.ReportNavigationError();
                 NotifyNavigationSelection();
             }
         });
@@ -72,6 +82,7 @@ public sealed class ShellViewModel : ViewModelBase
         AppPage.AwsConnection => "AWS 연결 관리",
         AppPage.GroupWorkspace => "그룹 만들기",
         AppPage.GroupDetail => "그룹 상세",
+        AppPage.GroupManagement => "그룹 관리",
         AppPage.History => "작업 기록",
         AppPage.Settings => "설정",
         _ => string.Empty
@@ -87,7 +98,7 @@ public sealed class ShellViewModel : ViewModelBase
     public bool IsConnected => _connection.IsConnected;
     public bool RequiresReconnect => _connection.RequiresReconnect;
 
-    public bool IsDashboardSelected => _navigation.CurrentPage is AppPage.Dashboard or AppPage.GroupDetail;
+    public bool IsDashboardSelected => _navigation.CurrentPage is AppPage.Dashboard or AppPage.GroupDetail or AppPage.GroupManagement;
     public bool IsAwsConnectionSelected => _navigation.CurrentPage == AppPage.AwsConnection;
     public bool IsGroupWorkspaceSelected => _navigation.CurrentPage == AppPage.GroupWorkspace;
     public bool IsHistorySelected => _navigation.CurrentPage == AppPage.History;

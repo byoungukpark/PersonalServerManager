@@ -23,9 +23,6 @@ public partial class App : System.Windows.Application
             // 설정 파일 손상은 시작 시 알리고 종료한다. 이 단계에서는 AWS API를 호출하지 않는다.
             var restoredProfileName = await settingsStore.LoadAsync(CancellationToken.None);
             var controlActivity = new ControlActivityState();
-            var groupService = new ServiceGroupService(settingsStore, controlActivity: controlActivity);
-            _ = await groupService.ListAsync(CancellationToken.None);
-
             var profileProvider = new AwsProfileProvider();
             var sessionFactory = new AwsProfileSessionFactory(profileProvider);
             var connection = new AwsConnectionService(
@@ -33,16 +30,24 @@ public partial class App : System.Windows.Application
                 sessionFactory,
                 controlActivity,
                 new DispatcherSynchronizationContext(Dispatcher));
+            var groupService = new ServiceGroupService(settingsStore,
+                controlActivity: controlActivity, connection: connection);
+            _ = await groupService.ListAsync(CancellationToken.None);
 
             var navigation = new NavigationService();
             var confirmation = new ConfirmationDialogService();
             var resourceQuery = new AwsResourceQueryService(connection);
             var groupStatus = new GroupStatusService(connection, resourceQuery);
+            var metricQuery = new AwsCloudWatchMetricQuery(connection);
             var controlSettings = await settingsStore.LoadControlSettingsAsync(CancellationToken.None);
             var settings = new SettingsViewModel(settingsStore, confirmation, controlSettings);
             var control = new ResourceControlService(connection, groupService, controlActivity, () => settings.Current);
             var dashboard = new DashboardViewModel(navigation, groupService, groupStatus);
-            var groupDetail = new GroupDetailViewModel(navigation, groupService, groupStatus, confirmation, control);
+            var groupDetail = new GroupDetailViewModel(navigation, groupService, groupStatus, confirmation, control, metricQuery);
+            dashboard.GroupStatusRead += groupDetail.ApplySharedStatus;
+            dashboard.GroupStatusRefreshChanged += groupDetail.SetSharedStatusRefreshing;
+            var groupManagement = new GroupManagementViewModel(groupService, connection, resourceQuery,
+                confirmation);
             controlActivity.PropertyChanged += async (_, args) =>
             {
                 if (args.PropertyName == nameof(ControlActivityState.IsControlRunning) && !controlActivity.IsControlRunning)
@@ -50,6 +55,19 @@ public partial class App : System.Windows.Application
             };
             navigation.Register(AppPage.Dashboard, dashboard);
             navigation.Register(AppPage.GroupDetail, groupDetail);
+            navigation.Register(AppPage.GroupManagement, groupManagement);
+            groupDetail.ManageGroupRequested += id =>
+            {
+                navigation.NavigateTo(AppPage.GroupManagement);
+                _ = groupManagement.LoadAsync(id);
+            };
+            groupManagement.ReturnToDetailRequested += id =>
+            {
+                navigation.NavigateTo(AppPage.GroupDetail);
+                _ = groupDetail.LoadAsync(id);
+            };
+            groupManagement.Deleted += () => navigation.NavigateTo(AppPage.Dashboard);
+            groupService.GroupUpdated += async _ => await dashboard.LoadAsync();
             var awsConnectionViewModel = new AwsConnectionViewModel(
                 connection, settingsStore, confirmation, restoredProfileName);
             navigation.Register(AppPage.AwsConnection, awsConnectionViewModel);
@@ -84,6 +102,8 @@ public partial class App : System.Windows.Application
             // 앱이 열려 있는 동안 등록 그룹의 기본 상태를 30초마다 갱신한다.
             var statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
             statusTimer.Tick += async (_, _) => await dashboard.RefreshStatusesAsync();
+            var metricTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(5) };
+            metricTimer.Tick += async (_, _) => await groupDetail.RefreshMetricsIfDueAsync();
             connection.PropertyChanged += async (_, args) =>
             {
                 if (args.PropertyName != nameof(AwsConnectionService.ActiveConnection) &&
@@ -91,7 +111,10 @@ public partial class App : System.Windows.Application
                 if (navigation.CurrentPage == AppPage.Dashboard)
                     await dashboard.RefreshStatusesAsync();
                 else if (navigation.CurrentPage == AppPage.GroupDetail && groupDetail.CurrentGroupId is { } id)
+                {
                     await groupDetail.LoadAsync(id);
+                    groupDetail.ResetMetricsForConnection();
+                }
             };
             navigation.PropertyChanged += async (_, args) =>
             {
@@ -102,10 +125,16 @@ public partial class App : System.Windows.Application
 
             var window = new MainWindow
             {
-                DataContext = new ShellViewModel(navigation, connection, wizard, controlActivity, confirmation)
+                DataContext = new ShellViewModel(navigation, connection, wizard, controlActivity,
+                    confirmation, groupManagement)
             };
             MainWindow = window;
-            window.Closed += (_, _) => statusTimer.Stop();
+            window.Closed += (_, _) =>
+            {
+                statusTimer.Stop();
+                metricTimer.Stop();
+                groupDetail.CancelMetricRefresh();
+            };
             var closeAfterProfileSave = false;
             var checkingProfileSave = false;
             window.Closing += async (_, args) =>
@@ -131,6 +160,8 @@ public partial class App : System.Windows.Application
                     {
                         return;
                     }
+                    if (navigation.CurrentPage == AppPage.GroupManagement &&
+                        !await groupManagement.ConfirmLeaveAsync()) return;
                     await awsConnectionViewModel.FlushSelectedProfileAsync();
                     closeAfterProfileSave = true;
                     _ = window.Dispatcher.BeginInvoke(new Action(window.Close));
@@ -160,6 +191,7 @@ public partial class App : System.Windows.Application
             ShutdownMode = ShutdownMode.OnMainWindowClose;
             window.Show();
             statusTimer.Start();
+            metricTimer.Start();
         }
         catch (AppSettingsException exception)
         {
