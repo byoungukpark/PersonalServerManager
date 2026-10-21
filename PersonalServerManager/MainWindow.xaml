@@ -8,6 +8,9 @@
         FontFamily="Segoe UI" FontSize="14"
         Background="{StaticResource AppBackgroundBrush}"
         Foreground="{StaticResource PrimaryTextBrush}">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+    </Window.Resources>
     <Grid>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="250" />
@@ -158,6 +161,7 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <Border Width="35" Height="35" CornerRadius="9"
                         Background="{StaticResource SubtleSurfaceBrush}"
@@ -167,17 +171,51 @@
                                HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Border>
                 <StackPanel Grid.Column="1" VerticalAlignment="Center" DataContext="{Binding ControlActivity}">
-                    <TextBlock Text="{Binding Target}" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding Target}" FontWeight="SemiBold"
+                               Foreground="{StaticResource PrimaryTextBrush}" />
                     <TextBlock Text="{Binding DisplayMessage}" TextWrapping="Wrap"
                                FontSize="12" Style="{StaticResource GroupStatusTextStyle}" />
-                    <Expander Header="최근 작업 (최대 5건)" Margin="0,6,0,0">
+                    <TextBlock Text="남은 작업 취소 요청됨 · 현재 단계의 결과를 확인한 뒤 후속 명령을 중단합니다."
+                               FontSize="12" Foreground="{StaticResource SecondaryTextBrush}"
+                               Visibility="{Binding CancelRemainingRequested, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                    <Expander Header="단계별 진행" Margin="0,6,0,0"
+                              Foreground="{StaticResource PrimaryTextBrush}"
+                              Visibility="{Binding HasSteps, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <ScrollViewer MaxHeight="180" VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding Steps}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Margin="0,4">
+                                            <TextBlock FontWeight="SemiBold"
+                                                       Foreground="{StaticResource PrimaryTextBrush}">
+                                                <Run Text="{Binding Position}" /><Run Text=". " />
+                                                <Run Text="{Binding Target}" /><Run Text=" · " />
+                                                <Run Text="{Binding Status}" />
+                                            </TextBlock>
+                                            <TextBlock Text="{Binding Message}" TextWrapping="Wrap" FontSize="13"
+                                                       Foreground="{StaticResource SecondaryTextBrush}" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Expander>
+                    <Expander Header="최근 작업 (최대 5건)" Margin="0,6,0,0"
+                              Foreground="{StaticResource PrimaryTextBrush}">
                         <ItemsControl ItemsSource="{Binding Recent}">
                             <ItemsControl.ItemTemplate>
-                                <DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="0,4" /></DataTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="0,4"
+                                               Foreground="{StaticResource SecondaryTextBrush}" />
+                                </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                     </Expander>
                 </StackPanel>
+                <Button Grid.Column="2" Content="남은 작업 취소" Command="{Binding CancelRemainingCommand}"
+                        Style="{StaticResource SecondaryButtonStyle}" Margin="18,0,0,0"
+                        VerticalAlignment="Top"
+                        Visibility="{Binding ControlActivity.CanCancelRemaining, Converter={StaticResource BooleanToVisibilityConverter}}" />
             </Grid>
         </Border>
     </Grid>

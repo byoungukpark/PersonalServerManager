@@ -94,6 +94,25 @@
 
                 <Border Style="{StaticResource SurfaceCardStyle}" Padding="24" Margin="0,0,0,18">
                     <StackPanel>
+                        <TextBlock Text="그룹 전체 제어" FontSize="18" FontWeight="SemiBold"
+                                   Foreground="{StaticResource PrimaryTextBrush}" />
+                        <TextBlock Text="EC2와 RDS를 저장된 순서로 시작하고 역순으로 중지합니다. 각 자원의 실제 상태를 확인한 뒤 다음 단계로 진행합니다."
+                                   Margin="0,6,0,16" TextWrapping="Wrap"
+                                   Foreground="{StaticResource MutedTextBrush}" />
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="그룹 시작" Command="{Binding StartGroupCommand}"
+                                    Style="{StaticResource PrimaryButtonStyle}" Margin="0,0,10,0" />
+                            <Button Content="그룹 중지" Command="{Binding StopGroupCommand}"
+                                    Style="{StaticResource SecondaryButtonStyle}" />
+                        </StackPanel>
+                        <TextBlock Text="실행 전 대상과 순서를 확인합니다. 진행과 단계별 결과는 화면 아래에 표시됩니다."
+                                   Margin="0,12,0,0" TextWrapping="Wrap"
+                                   Foreground="{StaticResource MutedTextBrush}" />
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource SurfaceCardStyle}" Padding="24" Margin="0,0,0,18">
+                    <StackPanel>
                         <TextBlock Text="등록 리소스" FontSize="18" FontWeight="SemiBold"
                                    Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,14" />
                         <TextBlock Text="등록된 리소스가 없습니다." Margin="0,0,0,8"

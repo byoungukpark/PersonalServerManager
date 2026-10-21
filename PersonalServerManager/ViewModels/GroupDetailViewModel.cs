@@ -19,7 +19,7 @@ public sealed record RegisteredResourceRow(string Kind, string Name, string Id, 
 }
 public sealed record StartOrderRow(int Position, string Kind, string Name, string Id);
 
-/// <summary>등록된 그룹 구성·상태와 선택 자원의 개별 제어를 제공한다.</summary>
+/// <summary>등록된 그룹 구성·상태와 그룹/개별 자원 제어를 제공한다.</summary>
 public sealed class GroupDetailViewModel : ViewModelBase
 {
     private readonly ServiceGroupService _groups;
@@ -31,6 +31,7 @@ public sealed class GroupDetailViewModel : ViewModelBase
     private bool _isDeleting;
     private readonly ResourceControlService? _control;
     private readonly Dictionary<ResourceControlAction, AsyncRelayCommand> _controlCommands;
+    private readonly Dictionary<ResourceControlAction, AsyncRelayCommand> _groupControlCommands;
     private RegisteredResourceRow? _selectedResource;
     private int _selectedServiceIndex;
     private string _resourceSearch = string.Empty;
@@ -66,6 +67,11 @@ public sealed class GroupDetailViewModel : ViewModelBase
             new AsyncRelayCommand(token => ControlSelectedAsync(action, token), () => CanRun(action),
                 exception => ErrorMessage = exception is ServiceGroupException
                     ? exception.Message : "제어 작업을 시작하지 못했습니다."));
+        _groupControlCommands = new[] { ResourceControlAction.Start, ResourceControlAction.Stop }
+            .ToDictionary(action => action, action => new AsyncRelayCommand(
+                token => ControlGroupAsync(action, token), CanRunGroup,
+                exception => ErrorMessage = exception is ServiceGroupException
+                    ? exception.Message : "그룹 제어 작업을 시작하지 못했습니다."));
         if (_control is not null)
         {
             _control.Activity.PropertyChanged += (_, _) =>
@@ -84,6 +90,8 @@ public sealed class GroupDetailViewModel : ViewModelBase
     public ICommand StartCommand => _controlCommands[ResourceControlAction.Start];
     public ICommand StopCommand => _controlCommands[ResourceControlAction.Stop];
     public ICommand RebootCommand => _controlCommands[ResourceControlAction.Reboot];
+    public ICommand StartGroupCommand => _groupControlCommands[ResourceControlAction.Start];
+    public ICommand StopGroupCommand => _groupControlCommands[ResourceControlAction.Stop];
     public bool IsControlRunning => _control?.Activity.IsControlRunning == true;
     public bool IsControlSelection => SelectedResource is { Kind: "EC2" or "RDS" };
     public string SelectionMessage => SelectedResource is null ? "리소스를 선택하세요." :
@@ -392,10 +400,41 @@ public sealed class GroupDetailViewModel : ViewModelBase
             SelectedResource.Status == (SelectedResource.Kind == "EC2" ? "running" : "available");
     }
 
+    private bool CanRunGroup() => _control?.CanControl(_group) == true &&
+        _group?.StartOrder.Count > 0 && !IsDeleting && !IsLoading && !_isConfirmingControl && !HasAccessIssue;
+
     private void RefreshControlCommands()
     {
         if (_controlCommands is null) return;
         foreach (var command in _controlCommands.Values) command.RaiseCanExecuteChanged();
+        if (_groupControlCommands is not null)
+            foreach (var command in _groupControlCommands.Values) command.RaiseCanExecuteChanged();
+    }
+
+    /// <summary>확인창의 실행 순서와 연결 세대를 고정하고 실행 서비스에서 한 번 더 검증한다.</summary>
+    public async Task ControlGroupAsync(ResourceControlAction action, CancellationToken cancellationToken = default)
+    {
+        if (!CanRunGroup() || _group is null || _control is null) return;
+        var group = _group;
+        var plan = ResourceControlService.BuildGroupPlan(group, action);
+        var version = _control.ConnectionVersion!.Value;
+        _isConfirmingControl = true;
+        RefreshControlCommands();
+        _deleteCommand.RaiseCanExecuteChanged();
+        try
+        {
+            if (!await _confirmation.ConfirmAsync("AWS 그룹 제어 확인",
+                _control.GroupConfirmationText(group, action, plan), $"그룹 {ResourceControlService.ActionLabel(action)}",
+                cancellationToken)) return;
+            await _control.ExecuteGroupAsync(group.Id, action, version, plan);
+            if (_groupId == group.Id) await LoadAsync(group.Id);
+        }
+        finally
+        {
+            _isConfirmingControl = false;
+            RefreshControlCommands();
+            _deleteCommand.RaiseCanExecuteChanged();
+        }
     }
 
     /// <summary>확인 대상을 고정하고 화면 이동 후에도 서비스의 제어 처리를 계속한다.</summary>

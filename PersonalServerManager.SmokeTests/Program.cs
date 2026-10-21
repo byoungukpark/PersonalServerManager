@@ -24,6 +24,8 @@ var checks = new List<(string Name, Func<Task> Run)>
     ("제어 게이트·미지원·권한·인증·통신 오류", ControlGuardsAsync),
     ("제어 중 프로필·삭제·중복 차단과 시간 초과", ControlTimeoutAsync),
     ("제어 확인 취소·연결 변경·화면 이동", ControlViewModelAsync),
+    ("그룹 순차 시작·역순 중지·목표 상태 건너뛰기", GroupSequenceAsync),
+    ("그룹 실패·시간 초과·남은 작업 취소", GroupInterruptionAsync),
     ("대시보드·그룹 상세 WPF 화면 생성", WpfViewsAsync)
 };
 
@@ -144,6 +146,113 @@ static async Task ControlViewModelAsync()
     await fixture.Connection.ConnectAsync("other", default);
     await fixture.Control.ExecuteAsync(fixture.Group.Id, AwsResourceKind.Ec2, "i-1", ResourceControlAction.Start, fixture.Version);
     Check(fixture.Activity.Message.Contains("실패") && fixture.Session.Sent == 1, "이전 확인창 연결로 제어함");
+}
+
+static async Task GroupSequenceAsync()
+{
+    var unconfirmed = await ControlFixtureAsync();
+    var navigation = new NavigationService();
+    var status = new GroupStatusService(unconfirmed.Connection, new FakeQuery());
+    var confirmation = new FakeConfirmation { Result = false };
+    var detail = new GroupDetailViewModel(navigation, unconfirmed.Groups, status, confirmation, unconfirmed.Control);
+    await detail.LoadAsync(unconfirmed.Group.Id);
+    await detail.ControlGroupAsync(ResourceControlAction.Start);
+    Check(unconfirmed.Session.Sent == 0, "그룹 제어 확인 취소 후 AWS 명령 전송");
+
+    foreach (var action in new[] { ResourceControlAction.Start, ResourceControlAction.Stop })
+    {
+        var fixture = await ControlFixtureAsync();
+        var plan = ResourceControlService.BuildGroupPlan(fixture.Group, action);
+        var initial = action == ResourceControlAction.Start ? "stopped" : "running";
+        fixture.Session.ControlState = (_, kind, id, _) => Task.FromResult(new ResourceControlSnapshot(
+            fixture.Session.SentCommands.Any(command => command.Id == id)
+                ? action == ResourceControlAction.Stop ? "stopped" : kind == AwsResourceKind.Ec2 ? "running" : "available"
+                : action == ResourceControlAction.Stop && kind == AwsResourceKind.Rds ? "available" : initial));
+        var operation = fixture.Control.ExecuteGroupAsync(fixture.Group.Id, action, fixture.Version, plan);
+        await UntilAsync(() => fixture.Session.Sent == 1 && fixture.Clock.PendingTimers >= 2);
+        Check(fixture.Session.SentCommands[0].Id == plan[0].Id && fixture.Activity.Steps[1].Status == "대기",
+            "첫 목표 상태 확인 전에 다음 자원을 제어함");
+        fixture.Clock.Advance(TimeSpan.FromSeconds(plan[0].Kind == AwsResourceKind.Ec2 ? 5 : 15));
+        await UntilAsync(() => fixture.Session.Sent == 2 && fixture.Clock.PendingTimers >= 2);
+        Check(fixture.Session.SentCommands[1].Id == plan[1].Id, "저장된 시작/역순 중지 계획 불일치");
+        fixture.Clock.Advance(TimeSpan.FromSeconds(plan[1].Kind == AwsResourceKind.Ec2 ? 5 : 15));
+        await operation;
+        Check(fixture.Activity.Steps.All(step => step.Status == "완료") &&
+            fixture.Activity.Message.StartsWith("완료") && !fixture.Activity.IsControlRunning,
+            "그룹 제어 목표 상태 완료 오류");
+
+        await fixture.Control.ExecuteGroupAsync(fixture.Group.Id, action, fixture.Version, plan);
+        Check(fixture.Session.Sent == 2 && fixture.Activity.Steps.All(step => step.Status == "건너뜀"),
+            "이미 목표 상태인 자원에 AWS 명령을 보냄");
+    }
+}
+
+static async Task GroupInterruptionAsync()
+{
+    var failed = await ControlFixtureAsync();
+    var extra = new GroupResource(AwsResourceKind.Ec2, "i-2", "작업 서버");
+    var group = failed.Group with
+    {
+        Resources = [.. failed.Group.Resources, extra],
+        StartOrder = [.. failed.Group.StartOrder, new GroupResourceRef(AwsResourceKind.Ec2, extra.Id)]
+    };
+    failed.Store.Groups[0] = group;
+    failed.Session.ControlState = (_, kind, id, _) => Task.FromResult(new ResourceControlSnapshot(
+        id == "db-1" ? "failed" : failed.Session.SentCommands.Any(command => command.Id == id) ? "running" : "stopped"));
+    var operation = failed.Control.ExecuteGroupAsync(group.Id, ResourceControlAction.Start, failed.Version, group.StartOrder);
+    await UntilAsync(() => failed.Session.Sent == 1 && failed.Clock.PendingTimers >= 2);
+    failed.Clock.Advance(TimeSpan.FromSeconds(5));
+    await operation;
+    Check(failed.Session.Sent == 1 && failed.Activity.Steps[1].Status == "실패" &&
+        failed.Activity.Steps[2].Status == "미실행", "중간 단계 실패 후 후속 명령 제출");
+
+    var cancelled = await ControlFixtureAsync();
+    cancelled.Session.ControlState = (_, kind, id, _) => Task.FromResult(new ResourceControlSnapshot(
+        cancelled.Session.SentCommands.Any(command => command.Id == id)
+            ? kind == AwsResourceKind.Ec2 ? "running" : "available" : "stopped"));
+    var cancelOperation = cancelled.Control.ExecuteGroupAsync(cancelled.Group.Id, ResourceControlAction.Start,
+        cancelled.Version, cancelled.Group.StartOrder);
+    await UntilAsync(() => cancelled.Session.Sent == 1 && cancelled.Clock.PendingTimers >= 2);
+    try
+    {
+        await cancelled.Control.ExecuteAsync(cancelled.Group.Id, AwsResourceKind.Rds, "db-1",
+            ResourceControlAction.Start, cancelled.Version);
+        throw new Exception("그룹 제어 중 개별 제어를 허용함");
+    }
+    catch (ServiceGroupException) { }
+    cancelled.Activity.RequestCancelRemaining();
+    Check(cancelled.Session.Sent == 1 && cancelled.Activity.IsControlRunning, "취소 요청이 현재 단계를 중단함");
+    cancelled.Clock.Advance(TimeSpan.FromSeconds(5));
+    await cancelOperation;
+    Check(cancelled.Session.Sent == 1 && cancelled.Activity.Steps[0].Status == "완료" &&
+        cancelled.Activity.Steps[1].Status == "사용자 취소" && cancelled.Activity.Message.StartsWith("사용자 취소"),
+        "현재 단계 완료 후 남은 작업 취소 실패");
+
+    var timedOut = await ControlFixtureAsync();
+    timedOut.Session.ControlState = (_, _, _, _) => Task.FromResult(new ResourceControlSnapshot("stopped"));
+    var timeoutOperation = timedOut.Control.ExecuteGroupAsync(timedOut.Group.Id, ResourceControlAction.Start,
+        timedOut.Version, timedOut.Group.StartOrder);
+    await UntilAsync(() => timedOut.Session.Sent == 1 && timedOut.Clock.PendingTimers >= 2);
+    timedOut.Clock.Advance(TimeSpan.FromMinutes(11));
+    await timeoutOperation;
+    Check(timedOut.Session.Sent == 1 && timedOut.Activity.Steps[0].Status == "시간 초과" &&
+        timedOut.Activity.Steps[1].Status == "미실행", "시간 초과 후 후속 명령 제출");
+
+    var guarded = await ControlFixtureAsync();
+    await guarded.Control.ExecuteGroupAsync(guarded.Group.Id, ResourceControlAction.Start, guarded.Version,
+        [new GroupResourceRef(AwsResourceKind.Rds, "db-1")]);
+    Check(guarded.Session.Sent == 0 && guarded.Activity.Message.Contains("실행 순서"),
+        "확인 후 변경된 그룹 계획을 허용함");
+    await guarded.Control.ExecuteGroupAsync(guarded.Group.Id, ResourceControlAction.Start, guarded.Version + 1,
+        guarded.Group.StartOrder);
+    Check(guarded.Session.Sent == 0 && guarded.Activity.Message.Contains("연결"),
+        "확인 후 변경된 AWS 연결을 허용함");
+
+    var empty = guarded.Group with { Id = Guid.NewGuid(), Resources = [], StartOrder = [] };
+    guarded.Store.Groups.Add(empty);
+    await guarded.Control.ExecuteGroupAsync(empty.Id, ResourceControlAction.Start, guarded.Version, []);
+    Check(guarded.Session.Sent == 0 && guarded.Activity.Message.Contains("제어할"),
+        "빈 그룹에 AWS 명령을 보냄");
 }
 
 static async Task<(AwsConnectionService Connection, FakeSession Session, ServiceGroup Group,
@@ -490,6 +599,11 @@ static Task WpfViewsAsync()
         {
             var app = new PersonalServerManager.App();
             app.InitializeComponent();
+            // 전역 하단 단계 목록과 취소 버튼의 XAML 리소스도 화면 생성 시 확인한다.
+            var window = new PersonalServerManager.MainWindow();
+            window.Measure(new System.Windows.Size(1440, 900));
+            window.Arrange(new System.Windows.Rect(0, 0, 1440, 900));
+            window.UpdateLayout();
             var navigation = new NavigationService();
             var group = Group();
             var groups = new ServiceGroupService(new FakeGroupStore { Groups = [group] });
@@ -609,6 +723,7 @@ sealed class FakeSessionFactory : IAwsProfileSessionFactory
 sealed class FakeSession(string profileName) : IAwsProfileSession, IAwsResourceControlSession
 {
     public int Sent { get; private set; }
+    public List<(AwsResourceKind Kind, string Id, ResourceControlAction Action)> SentCommands { get; } = [];
     public Func<string, AwsResourceKind, string, CancellationToken, Task<ResourceControlSnapshot>> ControlState { get; set; } =
         (_, _, _, _) => Task.FromResult(new ResourceControlSnapshot("stopped"));
     public Func<string, AwsResourceKind, string, ResourceControlAction, CancellationToken, Task> Send { get; set; } =
@@ -618,6 +733,7 @@ sealed class FakeSession(string profileName) : IAwsProfileSession, IAwsResourceC
     public Task SendControlAsync(string region, AwsResourceKind kind, string id, ResourceControlAction action, CancellationToken token)
     {
         Sent++;
+        SentCommands.Add((kind, id, action));
         return Send(region, kind, id, action, token);
     }
     public bool ExpireOnVerify { get; set; }

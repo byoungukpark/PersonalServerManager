@@ -4,6 +4,7 @@ using PersonalServerManager.Services.Aws;
 using PersonalServerManager.Commands;
 using PersonalServerManager.Navigation;
 using PersonalServerManager.Services.Groups;
+using PersonalServerManager.Services.Dialogs;
 
 namespace PersonalServerManager.ViewModels;
 
@@ -13,14 +14,28 @@ public sealed class ShellViewModel : ViewModelBase
     private readonly NavigationService _navigation;
     private readonly AwsConnectionService _connection;
     private readonly GroupWizardViewModel _wizard;
+    private readonly AsyncRelayCommand _cancelRemainingCommand;
 
     public ShellViewModel(NavigationService navigation, AwsConnectionService connection, GroupWizardViewModel wizard,
-        ControlActivityState controlActivity)
+        ControlActivityState controlActivity, IConfirmationService confirmation)
     {
         _navigation = navigation;
         _connection = connection;
         _wizard = wizard;
         ControlActivity = controlActivity;
+        _cancelRemainingCommand = new AsyncRelayCommand(async token =>
+        {
+            if (!await confirmation.ConfirmAsync("남은 그룹 작업 취소",
+                "현재 진행 중인 자원의 결과 확인은 계속합니다. 이후 아직 제출하지 않은 AWS 명령을 취소하시겠습니까?\n\n이미 전송한 명령은 되돌리지 않습니다.",
+                "남은 작업 취소", token)) return;
+            ControlActivity.RequestCancelRemaining();
+        }, () => ControlActivity.CanCancelRemaining,
+        _ => ControlActivity.Report(ControlActivity.Target, "취소 확인창을 열지 못했습니다. 다시 시도해 주세요."));
+        ControlActivity.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(ControlActivityState.CanCancelRemaining))
+                _cancelRemainingCommand.RaiseCanExecuteChanged();
+        };
         _navigation.PropertyChanged += OnNavigationChanged;
         _connection.PropertyChanged += OnConnectionChanged;
         NavigateCommand = new RelayCommand(async parameter =>
@@ -48,6 +63,7 @@ public sealed class ShellViewModel : ViewModelBase
     }
 
     public ICommand NavigateCommand { get; }
+    public ICommand CancelRemainingCommand => _cancelRemainingCommand;
     public ControlActivityState ControlActivity { get; }
     public ViewModelBase? CurrentPageViewModel => _navigation.CurrentViewModel;
     public string CurrentPageTitle => _navigation.CurrentPage switch

@@ -102,7 +102,7 @@ public partial class App : System.Windows.Application
 
             var window = new MainWindow
             {
-                DataContext = new ShellViewModel(navigation, connection, wizard, controlActivity)
+                DataContext = new ShellViewModel(navigation, connection, wizard, controlActivity, confirmation)
             };
             MainWindow = window;
             window.Closed += (_, _) => statusTimer.Stop();
