@@ -32,7 +32,7 @@ public sealed class AwsProfileSessionFactory : IAwsProfileSessionFactory
     }
 }
 
-internal sealed class AwsProfileSession : IAwsProfileSession
+internal sealed partial class AwsProfileSession : IAwsProfileSession, IAwsResourceControlSession
 {
     private readonly AWSCredentials _credentials;
     private readonly RegionEndpoint _defaultRegion;

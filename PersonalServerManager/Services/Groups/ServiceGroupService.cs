@@ -9,15 +9,29 @@ public sealed class ServiceGroupService
     private readonly IServiceGroupStore _store;
     private readonly TimeProvider _timeProvider;
     private readonly SemaphoreSlim _creationGate = new(1, 1);
+    private readonly ControlActivityState? _controlActivity;
 
-    public ServiceGroupService(IServiceGroupStore store, TimeProvider? timeProvider = null)
+    public ServiceGroupService(IServiceGroupStore store, TimeProvider? timeProvider = null,
+        ControlActivityState? controlActivity = null)
     {
         _store = store;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _controlActivity = controlActivity;
     }
 
     public Task<IReadOnlyList<ServiceGroup>> ListAsync(CancellationToken cancellationToken) =>
         _store.LoadGroupsAsync(cancellationToken);
+
+    /// <summary>AWS 자원은 유지하고 로컬 그룹 구성만 삭제한다.</summary>
+    public async Task DeleteAsync(Guid groupId, CancellationToken cancellationToken)
+    {
+        if (_controlActivity?.IsControlRunning == true)
+            throw new ServiceGroupException("제어 작업 중에는 그룹을 삭제할 수 없습니다.");
+        await _store.DeleteGroupAsync(groupId, cancellationToken);
+        GroupDeleted?.Invoke(groupId);
+    }
+
+    public event Action<Guid>? GroupDeleted;
 
     public async Task<ServiceGroup> CreateAsync(
         string name,

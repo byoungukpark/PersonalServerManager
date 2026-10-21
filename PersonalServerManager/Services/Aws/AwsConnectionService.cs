@@ -83,6 +83,8 @@ public sealed class AwsConnectionService : INotifyPropertyChanged
         await _sessionGate.WaitAsync(cancellationToken);
         try
         {
+            // 재확인도 연결 세대를 갱신하므로 진행 중 제어의 세션을 변경하지 않는다.
+            EnsureConnectionChangeAllowed();
             var active = _activeConnection ?? throw new AwsConnectionException(
                 AwsConnectionFailureKind.ProfileMissing, "현재 연결된 AWS 프로필이 없습니다.");
             var session = _activeSession ?? throw new AwsConnectionException(
@@ -99,6 +101,8 @@ public sealed class AwsConnectionService : INotifyPropertyChanged
                         "현재 프로필이 이전과 다른 AWS 계정을 가리킵니다. 다시 연결해 계정을 확인하세요.");
                 }
 
+                // 재확인 응답 대기 중 시작된 제어가 있으면 기존 연결 세대를 유지한다.
+                EnsureConnectionChangeAllowed();
                 _activeConnection = active with
                 {
                     AccountId = identity.AccountId,

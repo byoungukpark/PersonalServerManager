@@ -3,6 +3,7 @@ using System.Windows.Input;
 using PersonalServerManager.Services.Aws;
 using PersonalServerManager.Commands;
 using PersonalServerManager.Navigation;
+using PersonalServerManager.Services.Groups;
 
 namespace PersonalServerManager.ViewModels;
 
@@ -13,11 +14,13 @@ public sealed class ShellViewModel : ViewModelBase
     private readonly AwsConnectionService _connection;
     private readonly GroupWizardViewModel _wizard;
 
-    public ShellViewModel(NavigationService navigation, AwsConnectionService connection, GroupWizardViewModel wizard)
+    public ShellViewModel(NavigationService navigation, AwsConnectionService connection, GroupWizardViewModel wizard,
+        ControlActivityState controlActivity)
     {
         _navigation = navigation;
         _connection = connection;
         _wizard = wizard;
+        ControlActivity = controlActivity;
         _navigation.PropertyChanged += OnNavigationChanged;
         _connection.PropertyChanged += OnConnectionChanged;
         NavigateCommand = new RelayCommand(async parameter =>
@@ -45,6 +48,7 @@ public sealed class ShellViewModel : ViewModelBase
     }
 
     public ICommand NavigateCommand { get; }
+    public ControlActivityState ControlActivity { get; }
     public ViewModelBase? CurrentPageViewModel => _navigation.CurrentViewModel;
     public string CurrentPageTitle => _navigation.CurrentPage switch
     {

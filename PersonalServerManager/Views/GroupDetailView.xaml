@@ -1,6 +1,7 @@
 <UserControl x:Class="PersonalServerManager.Views.GroupDetailView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Foreground="{StaticResource PrimaryTextBrush}">
     <UserControl.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
@@ -19,12 +20,19 @@
                                Margin="0,7,0,0" Foreground="{StaticResource MutedTextBrush}" />
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Content="그룹 삭제" Style="{StaticResource SecondaryButtonStyle}"
+                            Foreground="{StaticResource ErrorBrush}"
+                            Command="{Binding DeleteCommand}" Margin="0,0,10,0" />
                     <Button Content="새로고침" Style="{StaticResource SecondaryButtonStyle}"
                             Command="{Binding RefreshCommand}" Margin="0,0,10,0" />
                     <Button Content="대시보드로" Style="{StaticResource SecondaryButtonStyle}"
                             Command="{Binding BackToDashboardCommand}" />
                 </StackPanel>
             </DockPanel>
+
+            <TextBlock Text="그룹 삭제를 처리하는 중입니다…" Margin="0,0,0,16"
+                       Foreground="{StaticResource SecondaryTextBrush}"
+                       Visibility="{Binding IsDeleting, Converter={StaticResource BooleanToVisibilityConverter}}" />
 
             <TextBlock Text="그룹 구성을 불러오는 중입니다…" Margin="0,0,0,16"
                        Foreground="{StaticResource SecondaryTextBrush}"
@@ -101,15 +109,30 @@
                                 </Style>
                             </TextBlock.Style>
                         </TextBlock>
-                        <DataGrid ItemsSource="{Binding Resources}"
+                        <TabControl SelectedIndex="{Binding SelectedServiceIndex}" Margin="0,0,0,12"
+                                    Style="{StaticResource ResourceTabControlStyle}">
+                            <TabItem Header="EC2" />
+                            <TabItem Header="RDS" />
+                            <TabItem Header="S3" />
+                        </TabControl>
+                        <TextBox Text="{Binding ResourceSearch, UpdateSourceTrigger=PropertyChanged}"
+                                 Style="{StaticResource WizardTextBoxStyle}"
+                                 ToolTip="이름 또는 식별자 검색" Margin="0,0,0,12" />
+                        <Grid Height="500">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="3*" MinHeight="100" />
+                                <RowDefinition Height="8" />
+                                <RowDefinition Height="2*" MinHeight="140" />
+                            </Grid.RowDefinitions>
+                        <DataGrid ItemsSource="{Binding FilteredResources}"
+                                  SelectedItem="{Binding SelectedResource, Mode=TwoWay}" SelectionMode="Single"
                                   Style="{StaticResource ResourceDataGridStyle}"
                                   AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False"
-                                  MaxHeight="360" EnableRowVirtualization="True"
-                                  Visibility="{Binding HasResources, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                  EnableRowVirtualization="True">
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="서비스" Binding="{Binding Kind}" Width="100" />
-                                <DataGridTextColumn Header="이름" Binding="{Binding Name}" Width="*" />
-                                <DataGridTextColumn Header="식별자" Binding="{Binding Id}" Width="2*" />
+                                <DataGridTextColumn Header="이름" Binding="{Binding Name}" Width="*" MinWidth="150" />
+                                <DataGridTextColumn Header="식별자" Binding="{Binding Id}" Width="2*" MinWidth="180" />
                                 <DataGridTextColumn Header="리전" Binding="{Binding Region}" Width="180" />
                                 <DataGridTemplateColumn Header="현재 상태" Width="200">
                                     <DataGridTemplateColumn.CellTemplate>
@@ -121,6 +144,24 @@
                                 </DataGridTemplateColumn>
                             </DataGrid.Columns>
                         </DataGrid>
+                        <GridSplitter Grid.Row="1" Height="8" HorizontalAlignment="Stretch"
+                                      Background="{StaticResource StrokeBrush}" />
+                        <Border Grid.Row="2" Background="{StaticResource SubtleSurfaceBrush}" Padding="16">
+                            <StackPanel>
+                                <TextBlock Text="선택 리소스 · 기본 정보" FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding SelectionMessage}" TextWrapping="Wrap" Margin="0,10,0,12" />
+                                <StackPanel Orientation="Horizontal"
+                                            Visibility="{Binding IsControlSelection, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <Button Content="시작" Command="{Binding StartCommand}" Margin="0,0,8,0"
+                                            Style="{StaticResource SecondaryButtonStyle}" />
+                                    <Button Content="중지" Command="{Binding StopCommand}" Margin="0,0,8,0"
+                                            Style="{StaticResource SecondaryButtonStyle}" />
+                                    <Button Content="재부팅 (EC2)" Command="{Binding RebootCommand}"
+                                            Style="{StaticResource SecondaryButtonStyle}" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                        </Grid>
                     </StackPanel>
                 </Border>
 

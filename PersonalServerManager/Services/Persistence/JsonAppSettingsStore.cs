@@ -8,7 +8,7 @@ using PersonalServerManager.Models;
 namespace PersonalServerManager.Services.Persistence;
 
 /// <summary>프로필 선택과 서비스 그룹을 하나의 사용자별 JSON 파일에 안전하게 저장한다.</summary>
-public sealed class JsonAppSettingsStore : ISelectedProfileStore, IServiceGroupStore
+public sealed class JsonAppSettingsStore : ISelectedProfileStore, IServiceGroupStore, IControlSettingsStore
 {
     private const int CurrentSchemaVersion = 1;
     private static readonly SemaphoreSlim FileGate = new(1, 1);
@@ -161,6 +161,102 @@ public sealed class JsonAppSettingsStore : ISelectedProfileStore, IServiceGroupS
         }
     }
 
+    /// <summary>파일 잠금 안에서 대상만 제거하고 기존 원자적 저장 경로를 사용한다.</summary>
+    public async Task DeleteGroupAsync(Guid groupId, CancellationToken cancellationToken)
+    {
+        await FileGate.WaitAsync(cancellationToken);
+        try
+        {
+            var root = await ReadRootAsync(cancellationToken);
+            if (root is null)
+            {
+                throw new AppSettingsException("삭제할 서비스 그룹을 찾을 수 없습니다.");
+            }
+
+            var groups = ReadGroups(root);
+            var index = groups.ToList().FindIndex(group => group.Id == groupId);
+            if (index < 0)
+            {
+                throw new AppSettingsException("삭제할 서비스 그룹을 찾을 수 없습니다.");
+            }
+
+            // 전체 설정을 재생성하지 않아 다른 그룹과 사용자 설정을 보존한다.
+            ((JsonArray)root["groups"]!).RemoveAt(index);
+            await WriteAtomicallyAsync(root, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (AppSettingsException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            throw new AppSettingsException("서비스 그룹을 삭제하지 못했습니다. 설정 파일을 확인해 주세요.");
+        }
+        finally
+        {
+            FileGate.Release();
+        }
+    }
+
+    public async Task<ControlTimeoutSettings> LoadControlSettingsAsync(CancellationToken cancellationToken)
+    {
+        await FileGate.WaitAsync(cancellationToken);
+        try
+        {
+            var root = await ReadRootAsync(cancellationToken);
+            return ReadControlSettings(root);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException and not AppSettingsException)
+        {
+            throw new AppSettingsException("제어 제한시간 설정을 읽지 못했습니다.");
+        }
+        finally { FileGate.Release(); }
+    }
+
+    public async Task SaveControlSettingsAsync(ControlTimeoutSettings settings, CancellationToken cancellationToken)
+    {
+        settings.Validate();
+        await FileGate.WaitAsync(cancellationToken);
+        try
+        {
+            var root = await ReadRootAsync(cancellationToken) ?? NewRoot();
+            var appSettings = root["appSettings"] as JsonObject;
+            if (appSettings is null)
+            {
+                appSettings = new JsonObject();
+                root["appSettings"] = appSettings;
+            }
+            appSettings["controlTimeouts"] = JsonSerializer.SerializeToNode(settings, JsonOptions);
+            await WriteAtomicallyAsync(root, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException and not AppSettingsException)
+        {
+            throw new AppSettingsException("제어 제한시간 설정을 저장하지 못했습니다.");
+        }
+        finally { FileGate.Release(); }
+    }
+
+    private static ControlTimeoutSettings ReadControlSettings(JsonObject? root)
+    {
+        var node = root?["appSettings"]?["controlTimeouts"];
+        if (node is null) return new ControlTimeoutSettings();
+        try
+        {
+            var settings = node.Deserialize<ControlTimeoutSettings>(JsonOptions)
+                ?? throw new ServiceGroupException("제어 제한시간이 없습니다.");
+            settings.Validate();
+            return settings;
+        }
+        catch (Exception exception) when (exception is JsonException or ServiceGroupException or InvalidOperationException)
+        {
+            throw new AppSettingsException("제어 제한시간 설정이 올바르지 않습니다. 설정 파일을 확인해 주세요.");
+        }
+    }
+
     private async Task<JsonObject?> ReadRootAsync(CancellationToken cancellationToken)
     {
         if (!File.Exists(_path))
@@ -188,6 +284,7 @@ public sealed class JsonAppSettingsStore : ISelectedProfileStore, IServiceGroupS
         }
 
         _ = ReadGroups(root);
+        _ = ReadControlSettings(root);
         return root;
     }
 

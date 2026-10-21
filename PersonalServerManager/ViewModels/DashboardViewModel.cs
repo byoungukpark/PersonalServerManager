@@ -179,12 +179,14 @@ public sealed class DashboardViewModel : ViewModelBase
     private readonly SemaphoreSlim _statusGate = new(1, 1);
     private readonly AsyncRelayCommand _refreshCommand;
     private bool _isLoading;
+    private int _groupVersion;
     private string _errorMessage = string.Empty;
 
     public DashboardViewModel(NavigationService navigation, ServiceGroupService groups, GroupStatusService status)
     {
         _groups = groups;
         _status = status;
+        _groups.GroupDeleted += RemoveGroup;
         CreateGroupCommand = new RelayCommand(_ => navigation.NavigateTo(AppPage.GroupWorkspace));
         OpenGroupCommand = new RelayCommand(parameter =>
         {
@@ -246,8 +248,13 @@ public sealed class DashboardViewModel : ViewModelBase
         {
             IsLoading = true;
             ErrorMessage = string.Empty;
+            var version = _groupVersion;
             var groups = await _groups.ListAsync(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
+            if (version != _groupVersion)
+            {
+                return;
+            }
             var previous = Groups.ToDictionary(card => card.Id);
             Groups.Clear();
             foreach (var group in groups.OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase))
@@ -304,9 +311,25 @@ public sealed class DashboardViewModel : ViewModelBase
 
     private async Task UpdateCardAsync(ServiceGroupCard card, CancellationToken cancellationToken)
     {
+        if (!Groups.Contains(card)) return;
         card.IsRefreshing = true;
-        try { card.Apply(await _status.ReadAsync(card.Group, cancellationToken)); }
+        try
+        {
+            var result = await _status.ReadAsync(card.Group, cancellationToken);
+            if (Groups.Contains(card)) card.Apply(result);
+        }
         finally { card.IsRefreshing = false; }
+    }
+
+    /// <summary>저장 성공 후 카드와 그 카드의 상태를 제거하고 이전 목록 응답을 무효화한다.</summary>
+    private void RemoveGroup(Guid groupId)
+    {
+        _groupVersion++;
+        var card = Groups.FirstOrDefault(item => item.Id == groupId);
+        if (card is not null) Groups.Remove(card);
+        OnPropertyChanged(nameof(HasGroups));
+        OnPropertyChanged(nameof(IsEmpty));
+        OnPropertyChanged(nameof(GroupCountText));
     }
 
     private void ShowLoadError(Exception exception)

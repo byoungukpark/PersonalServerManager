@@ -16,7 +16,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="76" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="78" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <Border Grid.Column="0" Grid.RowSpan="3"
@@ -151,7 +151,7 @@
         <ContentControl Grid.Column="1" Grid.Row="1"
                         Content="{Binding CurrentPageViewModel}" />
 
-        <Border Grid.Column="1" Grid.Row="2" Padding="36,0"
+        <Border Grid.Column="1" Grid.Row="2" Padding="36,12"
                 Background="{StaticResource SurfaceBrush}"
                 BorderBrush="{StaticResource StrokeBrush}" BorderThickness="0,1,0,0">
             <Grid>
@@ -166,10 +166,17 @@
                                Foreground="{StaticResource MutedTextBrush}"
                                HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Border>
-                <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                    <TextBlock Text="작업 진행" FontWeight="SemiBold" />
-                    <TextBlock Text="제어 기능이 추가되면 이 영역에 진행 상황이 표시됩니다."
-                               FontSize="12" Foreground="{StaticResource MutedTextBrush}" />
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" DataContext="{Binding ControlActivity}">
+                    <TextBlock Text="{Binding Target}" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding DisplayMessage}" TextWrapping="Wrap"
+                               FontSize="12" Style="{StaticResource GroupStatusTextStyle}" />
+                    <Expander Header="최근 작업 (최대 5건)" Margin="0,6,0,0">
+                        <ItemsControl ItemsSource="{Binding Recent}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="0,4" /></DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Expander>
                 </StackPanel>
             </Grid>
         </Border>

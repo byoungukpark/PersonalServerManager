@@ -1,0 +1,26 @@
+<UserControl x:Class="PersonalServerManager.Views.SettingsView"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ Foreground="{StaticResource PrimaryTextBrush}">
+ <UserControl.Resources>
+  <ResourceDictionary>
+   <ResourceDictionary.MergedDictionaries>
+    <ResourceDictionary Source="Styles/ResourceDiscovery.xaml" />
+   </ResourceDictionary.MergedDictionaries>
+  </ResourceDictionary>
+ </UserControl.Resources>
+ <StackPanel Margin="36,32" MaxWidth="700" HorizontalAlignment="Left">
+  <TextBlock Text="AWS 제어 제한시간" FontSize="24" FontWeight="SemiBold" />
+  <TextBlock Text="제한시간이 지나도 이미 전송한 AWS 명령은 취소되지 않습니다."
+             Margin="0,12,0,24" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" />
+  <TextBlock Text="EC2 (1~60분 · 기본 10분)" />
+  <TextBox Text="{Binding Ec2Minutes, UpdateSourceTrigger=PropertyChanged}" Margin="0,8,0,18"
+           Style="{StaticResource WizardTextBoxStyle}" />
+  <TextBlock Text="RDS (1~120분 · 기본 30분)" />
+  <TextBox Text="{Binding RdsMinutes, UpdateSourceTrigger=PropertyChanged}" Margin="0,8,0,24"
+           Style="{StaticResource WizardTextBoxStyle}" />
+  <Button Content="변경사항 저장" Command="{Binding SaveCommand}" HorizontalAlignment="Left"
+          Style="{StaticResource PrimaryButtonStyle}" />
+  <TextBlock Text="{Binding Message}" TextWrapping="Wrap" Margin="0,20,0,0" />
+ </StackPanel>
+</UserControl>

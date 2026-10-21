@@ -22,10 +22,10 @@ public partial class App : System.Windows.Application
             var settingsStore = new JsonAppSettingsStore();
             // 설정 파일 손상은 시작 시 알리고 종료한다. 이 단계에서는 AWS API를 호출하지 않는다.
             var restoredProfileName = await settingsStore.LoadAsync(CancellationToken.None);
-            var groupService = new ServiceGroupService(settingsStore);
+            var controlActivity = new ControlActivityState();
+            var groupService = new ServiceGroupService(settingsStore, controlActivity: controlActivity);
             _ = await groupService.ListAsync(CancellationToken.None);
 
-            var controlActivity = new ControlActivityState();
             var profileProvider = new AwsProfileProvider();
             var sessionFactory = new AwsProfileSessionFactory(profileProvider);
             var connection = new AwsConnectionService(
@@ -38,8 +38,16 @@ public partial class App : System.Windows.Application
             var confirmation = new ConfirmationDialogService();
             var resourceQuery = new AwsResourceQueryService(connection);
             var groupStatus = new GroupStatusService(connection, resourceQuery);
+            var controlSettings = await settingsStore.LoadControlSettingsAsync(CancellationToken.None);
+            var settings = new SettingsViewModel(settingsStore, confirmation, controlSettings);
+            var control = new ResourceControlService(connection, groupService, controlActivity, () => settings.Current);
             var dashboard = new DashboardViewModel(navigation, groupService, groupStatus);
-            var groupDetail = new GroupDetailViewModel(navigation, groupService, groupStatus);
+            var groupDetail = new GroupDetailViewModel(navigation, groupService, groupStatus, confirmation, control);
+            controlActivity.PropertyChanged += async (_, args) =>
+            {
+                if (args.PropertyName == nameof(ControlActivityState.IsControlRunning) && !controlActivity.IsControlRunning)
+                    await dashboard.RefreshStatusesAsync();
+            };
             navigation.Register(AppPage.Dashboard, dashboard);
             navigation.Register(AppPage.GroupDetail, groupDetail);
             var awsConnectionViewModel = new AwsConnectionViewModel(
@@ -69,8 +77,7 @@ public partial class App : System.Windows.Application
             navigation.Register(AppPage.GroupWorkspace, wizard);
             navigation.Register(AppPage.History, new PlaceholderViewModel(
                 "작업 기록", "제어 작업 기록 조회 기능은 이후 단계에서 제공됩니다."));
-            navigation.Register(AppPage.Settings, new PlaceholderViewModel(
-                "설정", "앱 설정 기능은 이후 단계에서 제공됩니다."));
+            navigation.Register(AppPage.Settings, settings);
             await dashboard.LoadAsync();
             navigation.NavigateTo(AppPage.Dashboard);
 
@@ -95,7 +102,7 @@ public partial class App : System.Windows.Application
 
             var window = new MainWindow
             {
-                DataContext = new ShellViewModel(navigation, connection, wizard)
+                DataContext = new ShellViewModel(navigation, connection, wizard, controlActivity)
             };
             MainWindow = window;
             window.Closed += (_, _) => statusTimer.Stop();
@@ -117,6 +124,9 @@ public partial class App : System.Windows.Application
                 checkingProfileSave = true;
                 try
                 {
+                    if (controlActivity.IsControlRunning && !await confirmation.ConfirmAsync(
+                        "AWS 제어 진행 중", "앱을 종료하시겠습니까? 이미 전송한 AWS 명령은 서버에서 계속 진행될 수 있으며 완료 여부를 더 이상 확인하지 않습니다.",
+                        "종료")) return;
                     if (!await wizard.ConfirmLeaveAsync())
                     {
                         return;

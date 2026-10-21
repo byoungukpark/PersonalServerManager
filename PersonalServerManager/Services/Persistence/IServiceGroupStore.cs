@@ -1,4 +1,5 @@
 using PersonalServerManager.Models;
+using PersonalServerManager.Services.Groups;
 
 namespace PersonalServerManager.Services.Persistence;
 
@@ -7,4 +8,11 @@ public interface IServiceGroupStore
 {
     Task<IReadOnlyList<ServiceGroup>> LoadGroupsAsync(CancellationToken cancellationToken);
     Task AddGroupAsync(ServiceGroup group, CancellationToken cancellationToken);
+    Task DeleteGroupAsync(Guid groupId, CancellationToken cancellationToken);
+}
+
+public interface IControlSettingsStore
+{
+    Task<ControlTimeoutSettings> LoadControlSettingsAsync(CancellationToken cancellationToken);
+    Task SaveControlSettingsAsync(ControlTimeoutSettings settings, CancellationToken cancellationToken);
 }

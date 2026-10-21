@@ -17,6 +17,13 @@ var checks = new List<(string Name, Func<Task> Run)>
     ("연결 변경 후 늦은 응답 폐기", LateResponseAsync),
     ("원 조회 경계의 이전 세션 결과 폐기", QueryBoundaryAsync),
     ("그룹 마법사 조회 실패·빈 목록·늦은 응답", WizardQueryPathsAsync),
+    ("로컬 그룹 삭제·복원·자원 재등록", DeletePersistenceAsync),
+    ("그룹 삭제 취소·저장 실패·미연결", DeleteViewModelAsync),
+    ("조회 중 그룹 삭제와 늦은 응답", DeleteDuringQueryAsync),
+    ("개별 제어 정상 전이·재부팅 접수·목표 상태 건너뛰기", ControlSuccessAsync),
+    ("제어 게이트·미지원·권한·인증·통신 오류", ControlGuardsAsync),
+    ("제어 중 프로필·삭제·중복 차단과 시간 초과", ControlTimeoutAsync),
+    ("제어 확인 취소·연결 변경·화면 이동", ControlViewModelAsync),
     ("대시보드·그룹 상세 WPF 화면 생성", WpfViewsAsync)
 };
 
@@ -24,6 +31,239 @@ foreach (var (name, run) in checks)
 {
     await run();
     Console.WriteLine($"PASS {name}");
+}
+
+static async Task ControlSuccessAsync()
+{
+    foreach (var kind in new[] { AwsResourceKind.Ec2, AwsResourceKind.Rds })
+    foreach (var action in new[] { ResourceControlAction.Start, ResourceControlAction.Stop })
+    {
+        var fixture = await ControlFixtureAsync();
+        var id = kind == AwsResourceKind.Ec2 ? "i-1" : "db-1";
+        var goal = action == ResourceControlAction.Stop ? "stopped" : kind == AwsResourceKind.Ec2 ? "running" : "available";
+        var initial = action == ResourceControlAction.Start ? "stopped" : kind == AwsResourceKind.Ec2 ? "running" : "available";
+        fixture.Session.ControlState = (_, _, _, _) => Task.FromResult(new ResourceControlSnapshot(
+            fixture.Session.Sent == 0 ? initial : goal));
+        var operation = fixture.Control.ExecuteAsync(fixture.Group.Id, kind, id, action, fixture.Version);
+        await UntilAsync(() => fixture.Clock.PendingTimers >= 2);
+        fixture.Clock.Advance(TimeSpan.FromSeconds(kind == AwsResourceKind.Ec2 ? 5 : 15));
+        await operation;
+        Check(fixture.Activity.Message.Contains("완료") && fixture.Session.Sent == 1 && !fixture.Activity.IsControlRunning,
+            "명령 접수와 목표 상태 완료 오류");
+        await fixture.Control.ExecuteAsync(fixture.Group.Id, kind, id, action, fixture.Version);
+        Check(fixture.Session.Sent == 1 && fixture.Activity.Message.Contains("이미"), "이미 목표 상태인데 명령을 전송함");
+    }
+    var reboot = await ControlFixtureAsync();
+    reboot.Session.ControlState = (_, _, _, _) => Task.FromResult(new ResourceControlSnapshot("running"));
+    await reboot.Control.ExecuteAsync(reboot.Group.Id, AwsResourceKind.Ec2, "i-1", ResourceControlAction.Reboot, reboot.Version);
+    Check(reboot.Activity.Message.Contains("재부팅 완료 미확인") && reboot.Session.Sent == 1, "재부팅을 완료로 오인함");
+}
+
+static async Task ControlGuardsAsync()
+{
+    var fixture = await ControlFixtureAsync();
+    foreach (var target in new[] { (AwsResourceKind.S3, "bucket-1", ResourceControlAction.Start),
+        (AwsResourceKind.Ec2, "i-unregistered", ResourceControlAction.Start),
+        (AwsResourceKind.Rds, "db-1", ResourceControlAction.Reboot) })
+    {
+        await fixture.Control.ExecuteAsync(fixture.Group.Id, target.Item1, target.Item2, target.Item3, fixture.Version);
+        Check(fixture.Activity.Message.Contains("실패") && fixture.Session.Sent == 0, "미지원/미등록 제어 실행");
+    }
+    fixture.Session.ControlState = (_, _, _, _) => Task.FromResult(new ResourceControlSnapshot("available", "미지원 RDS 구성"));
+    await fixture.Control.ExecuteAsync(fixture.Group.Id, AwsResourceKind.Rds, "db-1", ResourceControlAction.Stop, fixture.Version);
+    Check(fixture.Session.Sent == 0 && fixture.Activity.Message.Contains("미지원"), "미지원 RDS 실행");
+    fixture.Session.ControlState = (_, _, _, _) => Task.FromResult(new ResourceControlSnapshot("pending"));
+    await fixture.Control.ExecuteAsync(fixture.Group.Id, AwsResourceKind.Ec2, "i-1", ResourceControlAction.Start, fixture.Version);
+    Check(fixture.Session.Sent == 0, "전환 중 자원 제어");
+    fixture.Store.Groups[0] = fixture.Group with { AccountId = "222222222222" };
+    await fixture.Control.ExecuteAsync(fixture.Group.Id, AwsResourceKind.Ec2, "i-1", ResourceControlAction.Start, fixture.Version);
+    Check(fixture.Session.Sent == 0 && fixture.Activity.Message.Contains("계정"), "계정 불일치 제어");
+
+    foreach (var failure in new[] { AwsQueryFailureKind.AccessDenied, AwsQueryFailureKind.Network, AwsQueryFailureKind.ExpiredSession })
+    {
+        var failed = await ControlFixtureAsync();
+        failed.Session.ControlState = (_, _, _, _) => Task.FromResult(new ResourceControlSnapshot("stopped"));
+        failed.Session.Send = (_, _, _, _, _) => throw new AwsResourceQueryException(failure, "테스트 오류");
+        await failed.Control.ExecuteAsync(failed.Group.Id, AwsResourceKind.Ec2, "i-1", ResourceControlAction.Start, failed.Version);
+        Check(failed.Activity.Message.Contains("실패") && failed.Activity.Message.Contains("진행 중일 수"), "실패/접수 불확실성 안내 누락");
+        Check(failed.Connection.RequiresReconnect == (failure == AwsQueryFailureKind.ExpiredSession), "오류별 인증 상태 오류");
+    }
+}
+
+static async Task ControlTimeoutAsync()
+{
+    var fixture = await ControlFixtureAsync();
+    fixture.Session.ControlState = (_, _, _, _) => Task.FromResult(new ResourceControlSnapshot("stopped"));
+    var operation = fixture.Control.ExecuteAsync(fixture.Group.Id, AwsResourceKind.Ec2, "i-1", ResourceControlAction.Start, fixture.Version);
+    await UntilAsync(() => fixture.Clock.PendingTimers >= 2);
+    Check(!fixture.Connection.CanChangeConnection, "제어 중 연결 변경 허용");
+    try { fixture.Connection.Disconnect(); throw new Exception("제어 중 해제 허용"); }
+    catch (AwsConnectionException) { }
+    try { await fixture.Connection.ConnectAsync("other", default); throw new Exception("제어 중 전환 허용"); }
+    catch (AwsConnectionException) { }
+    try { await fixture.Connection.VerifyAsync(default); throw new Exception("제어 중 연결 재확인 허용"); }
+    catch (AwsConnectionException) { }
+    try { await fixture.Groups.DeleteAsync(fixture.Group.Id, default); throw new Exception("제어 중 삭제 허용"); }
+    catch (ServiceGroupException) { }
+    try
+    {
+        await fixture.Control.ExecuteAsync(fixture.Group.Id, AwsResourceKind.Ec2, "i-1", ResourceControlAction.Start, fixture.Version);
+        throw new Exception("중복 제어 허용");
+    }
+    catch (ServiceGroupException) { }
+    fixture.Clock.Advance(TimeSpan.FromMinutes(11));
+    await operation;
+    Check(fixture.Activity.Message.Contains("시간 초과") && fixture.Activity.Message.Contains("취소되지") &&
+        fixture.Connection.CanChangeConnection && fixture.Session.Sent == 1, "시간 초과 처리 오류");
+}
+
+static async Task ControlViewModelAsync()
+{
+    var fixture = await ControlFixtureAsync();
+    var navigation = new NavigationService();
+    var query = new FakeQuery { Ec2 = (_, _) => Task.FromResult<IReadOnlyList<Ec2InstanceResource>>([new("i-1", "웹", "t3.micro", "stopped")]) };
+    var status = new GroupStatusService(fixture.Connection, query);
+    var confirmation = new FakeConfirmation { Result = false };
+    var detail = new GroupDetailViewModel(navigation, fixture.Groups, status, confirmation, fixture.Control);
+    navigation.Register(AppPage.GroupDetail, detail);
+    navigation.Register(AppPage.Dashboard, new DashboardViewModel(navigation, fixture.Groups, status));
+    navigation.NavigateTo(AppPage.GroupDetail);
+    await detail.LoadAsync(fixture.Group.Id);
+    detail.SelectedResource = detail.Resources.Single(row => row.Kind == "EC2");
+    await detail.ControlSelectedAsync(ResourceControlAction.Start);
+    Check(fixture.Session.Sent == 0, "확인 취소 후 명령 전송");
+    confirmation.Result = true;
+    fixture.Session.ControlState = (_, _, _, _) => Task.FromResult(new ResourceControlSnapshot(fixture.Session.Sent == 0 ? "stopped" : "running"));
+    var operation = detail.ControlSelectedAsync(ResourceControlAction.Start);
+    await UntilAsync(() => fixture.Clock.PendingTimers >= 2);
+    Check(!detail.DeleteCommand.CanExecute(null), "제어 중 삭제 버튼 활성");
+    navigation.NavigateTo(AppPage.Dashboard);
+    fixture.Clock.Advance(TimeSpan.FromSeconds(5));
+    await operation;
+    Check(navigation.CurrentPage == AppPage.Dashboard && fixture.Activity.Message.Contains("완료"), "화면 이동 시 제어 중단/강제 이동");
+    await fixture.Connection.ConnectAsync("other", default);
+    await fixture.Control.ExecuteAsync(fixture.Group.Id, AwsResourceKind.Ec2, "i-1", ResourceControlAction.Start, fixture.Version);
+    Check(fixture.Activity.Message.Contains("실패") && fixture.Session.Sent == 1, "이전 확인창 연결로 제어함");
+}
+
+static async Task<(AwsConnectionService Connection, FakeSession Session, ServiceGroup Group,
+    FakeGroupStore Store, ServiceGroupService Groups, ResourceControlService Control,
+    ControlActivityState Activity, ManualControlClock Clock, long Version)> ControlFixtureAsync()
+{
+    var activity = new ControlActivityState();
+    var factory = new FakeSessionFactory();
+    var connection = new AwsConnectionService(new FakeProfiles(), factory, activity);
+    await connection.ConnectAsync("first", default);
+    var group = Group();
+    var store = new FakeGroupStore { Groups = [group] };
+    var groups = new ServiceGroupService(store, controlActivity: activity);
+    var clock = new ManualControlClock();
+    var control = new ResourceControlService(connection, groups, activity, () => new ControlTimeoutSettings(), clock);
+    return (connection, factory.LastSession!, group, store, groups, control, activity, clock, connection.ActiveConnection!.ConnectionVersion);
+}
+
+static async Task DeletePersistenceAsync()
+{
+    var directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"psm-delete-{Guid.NewGuid():N}");
+    var path = System.IO.Path.Combine(directory, "settings.json");
+    try
+    {
+        var store = new JsonAppSettingsStore(path);
+        var service = new ServiceGroupService(store);
+        await store.SaveAsync("saved-profile", default);
+        await store.SaveControlSettingsAsync(new ControlTimeoutSettings(12, 40), default);
+        Check((await new JsonAppSettingsStore(path).LoadControlSettingsAsync(default)).RdsMinutes == 40, "제어 설정 복원 실패");
+        var sample = Group();
+        var group = await service.CreateAsync(sample.Name, sample.AccountId, sample.Region, sample.ProfileName,
+            sample.Resources, sample.StartOrder, default);
+        var empty = Group() with { Id = Guid.NewGuid(), Name = "빈 그룹", Resources = [], StartOrder = [] };
+        await store.AddGroupAsync(empty, default);
+        await service.DeleteAsync(group.Id, default);
+        var restored = new JsonAppSettingsStore(path);
+        Check((await restored.LoadGroupsAsync(default)).Single().Id == empty.Id, "대상 외 그룹 변경 또는 삭제 복원 실패");
+        Check(await restored.LoadAsync(default) == "saved-profile", "프로필 설정 유실");
+        await service.CreateAsync(group.Name, group.AccountId, group.Region, group.ProfileName,
+            group.Resources, group.StartOrder, default);
+        await service.DeleteAsync(empty.Id, default);
+        Check((await restored.LoadGroupsAsync(default)).Single().Resources.Count == 3, "빈 그룹 삭제 또는 자원 재등록 실패");
+
+        // Windows 파일 공유 제한으로 실제 저장 교체 실패를 유도하고 원본 보존을 확인한다.
+        var before = await System.IO.File.ReadAllTextAsync(path);
+        using (var file = new System.IO.FileStream(path, System.IO.FileMode.Open,
+            System.IO.FileAccess.Read, System.IO.FileShare.Read))
+        {
+            var remaining = (await store.LoadGroupsAsync(default)).Single();
+            try
+            {
+                await service.DeleteAsync(remaining.Id, default);
+                throw new Exception("저장 실패가 감지되지 않음");
+            }
+            catch (AppSettingsException) { }
+        }
+        Check(await System.IO.File.ReadAllTextAsync(path) == before, "저장 실패 후 원본 변경");
+    }
+    finally
+    {
+        if (System.IO.Directory.Exists(directory)) System.IO.Directory.Delete(directory, true);
+    }
+}
+
+static async Task DeleteViewModelAsync()
+{
+    var group = Group();
+    var store = new FakeGroupStore { Groups = [group] };
+    var service = new ServiceGroupService(store);
+    var navigation = new NavigationService();
+    var query = new FakeQuery();
+    var status = new GroupStatusService(Connection(), query);
+    var confirmation = new FakeConfirmation { Result = false };
+    var detail = new GroupDetailViewModel(navigation, service, status, confirmation);
+    var dashboard = new DashboardViewModel(navigation, service, status);
+    navigation.Register(AppPage.Dashboard, dashboard);
+    navigation.Register(AppPage.GroupDetail, detail);
+    navigation.NavigateTo(AppPage.GroupDetail);
+    await dashboard.LoadAsync();
+    await detail.LoadAsync(group.Id);
+    await detail.DeleteAsync();
+    Check(detail.HasGroup && store.Groups.Count == 1, "취소 후 그룹 유실");
+    confirmation.Result = true;
+    store.FailDelete = true;
+    try { await detail.DeleteAsync(); }
+    catch (AppSettingsException) { }
+    Check(detail.HasGroup && dashboard.Groups.Count == 1 && !detail.IsDeleting,
+        "실패 후 화면 또는 삭제 상태 오류");
+    store.FailDelete = false;
+    await detail.DeleteAsync();
+    Check(!detail.HasGroup && detail.CurrentGroupId is null && dashboard.IsEmpty,
+        "삭제 후 상세/카드 상태 잔존");
+    Check(navigation.CurrentPage == AppPage.Dashboard && query.Calls == 0, "미연결 삭제가 AWS 조회를 요구함");
+}
+
+static async Task DeleteDuringQueryAsync()
+{
+    var connection = Connection();
+    await connection.ConnectAsync("first", default);
+    var group = Group() with { Resources = [new(AwsResourceKind.Ec2, "i-1", "웹")],
+        StartOrder = [new(AwsResourceKind.Ec2, "i-1")] };
+    var store = new FakeGroupStore { Groups = [group] };
+    var service = new ServiceGroupService(store);
+    var response = new TaskCompletionSource<IReadOnlyList<Ec2InstanceResource>>();
+    var query = new FakeQuery { Ec2 = (_, _) => response.Task };
+    var status = new GroupStatusService(connection, query);
+    var navigation = new NavigationService();
+    var detail = new GroupDetailViewModel(navigation, service, status, new FakeConfirmation());
+    var dashboard = new DashboardViewModel(navigation, service, status);
+    navigation.Register(AppPage.Dashboard, dashboard);
+    navigation.Register(AppPage.GroupDetail, detail);
+    navigation.NavigateTo(AppPage.GroupDetail);
+    var cardLoad = dashboard.LoadAsync();
+    var detailLoad = detail.LoadAsync(group.Id);
+    Check(detail.IsLoading && detail.HasGroup, "조회 대기 상태 구성 실패");
+    await detail.DeleteAsync();
+    response.SetResult([new("i-1", "웹", "t3.micro", "running")]);
+    await Task.WhenAll(cardLoad, detailLoad);
+    Check(!detail.HasGroup && detail.Resources.Count == 0 && dashboard.Groups.Count == 0,
+        "늦은 조회가 삭제 그룹을 다시 반영함");
 }
 
 static ServiceGroup Group(string account = "111111111111") => new(
@@ -250,12 +490,41 @@ static Task WpfViewsAsync()
         {
             var app = new PersonalServerManager.App();
             app.InitializeComponent();
-            foreach (var view in new System.Windows.Controls.UserControl[]
-                     { new DashboardView(), new GroupDetailView() })
+            var navigation = new NavigationService();
+            var group = Group();
+            var groups = new ServiceGroupService(new FakeGroupStore { Groups = [group] });
+            var activity = new ControlActivityState();
+            var connection = new AwsConnectionService(new FakeProfiles(), new FakeSessionFactory(), activity);
+            connection.ConnectAsync("first", default).GetAwaiter().GetResult();
+            var query = new FakeQuery
             {
-                view.Measure(new System.Windows.Size(1200, 800));
-                view.Arrange(new System.Windows.Rect(0, 0, 1200, 800));
+                Ec2 = (_, _) => Task.FromResult<IReadOnlyList<Ec2InstanceResource>>([new("i-1", "웹 서버", "t3.micro", "stopped")])
+            };
+            var status = new GroupStatusService(connection, query);
+            var control = new ResourceControlService(connection, groups, activity, () => new ControlTimeoutSettings());
+            var detail = new GroupDetailViewModel(navigation, groups, status, new FakeConfirmation(), control);
+            detail.LoadAsync(group.Id).GetAwaiter().GetResult();
+            detail.SelectedResource = detail.Resources.First(row => row.Kind == "EC2");
+            var settings = new SettingsViewModel(new JsonAppSettingsStore(), new FakeConfirmation(), new ControlTimeoutSettings());
+            foreach (var view in new System.Windows.Controls.UserControl[]
+                     { new DashboardView(), new GroupDetailView { DataContext = detail }, new SettingsView { DataContext = settings } })
+            {
+                view.Measure(new System.Windows.Size(1280, 1100));
+                view.Arrange(new System.Windows.Rect(0, 0, 1280, 1100));
                 view.UpdateLayout();
+                view.Measure(new System.Windows.Size(1280, 1100));
+                view.Arrange(new System.Windows.Rect(0, 0, 1280, 1100));
+                view.UpdateLayout();
+                if (view is GroupDetailView or SettingsView)
+                {
+                    var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(1280, 1100, 96, 96,
+                        System.Windows.Media.PixelFormats.Pbgra32);
+                    bitmap.Render(view);
+                    var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                    encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
+                    using var image = System.IO.File.Create(System.IO.Path.Combine(AppContext.BaseDirectory, $"{view.GetType().Name}-preview.png"));
+                    encoder.Save(image);
+                }
             }
             completion.SetResult();
         }
@@ -277,6 +546,54 @@ sealed class FakeProfiles : IAwsProfileProvider
         Task.FromResult<IReadOnlyList<string>>(["first", "other"]);
 }
 
+/// <summary>분 단위 제한시간을 실제 대기 없이 진행시키는 제어 테스트 시계다.</summary>
+sealed class ManualControlClock : TimeProvider
+{
+    private readonly List<ClockTimer> _timers = [];
+    private TimeSpan _elapsed;
+    public int PendingTimers { get { lock (_timers) return _timers.Count(timer => !timer.Disposed); } }
+
+    public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+    {
+        lock (_timers)
+        {
+            var timer = new ClockTimer(this, callback, state, _elapsed + dueTime);
+            _timers.Add(timer);
+            return timer;
+        }
+    }
+
+    public void Advance(TimeSpan duration)
+    {
+        ClockTimer[] ready;
+        lock (_timers)
+        {
+            _elapsed += duration;
+            ready = _timers.Where(timer => !timer.Disposed && timer.Due <= _elapsed).ToArray();
+            foreach (var timer in ready) timer.Disposed = true;
+        }
+        foreach (var timer in ready) timer.Fire();
+    }
+
+    private sealed class ClockTimer(ManualControlClock clock, TimerCallback callback, object? state, TimeSpan due) : ITimer
+    {
+        public TimeSpan Due { get; private set; } = due;
+        public bool Disposed { get; set; }
+        public bool Change(TimeSpan dueTime, TimeSpan period)
+        {
+            lock (clock._timers)
+            {
+                if (Disposed) return false;
+                Due = clock._elapsed + dueTime;
+                return true;
+            }
+        }
+        public void Fire() => callback(state);
+        public void Dispose() { lock (clock._timers) Disposed = true; }
+        public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+    }
+}
+
 sealed class FakeSessionFactory : IAwsProfileSessionFactory
 {
     public FakeSession? LastSession { get; private set; }
@@ -289,8 +606,20 @@ sealed class FakeSessionFactory : IAwsProfileSessionFactory
     }
 }
 
-sealed class FakeSession(string profileName) : IAwsProfileSession
+sealed class FakeSession(string profileName) : IAwsProfileSession, IAwsResourceControlSession
 {
+    public int Sent { get; private set; }
+    public Func<string, AwsResourceKind, string, CancellationToken, Task<ResourceControlSnapshot>> ControlState { get; set; } =
+        (_, _, _, _) => Task.FromResult(new ResourceControlSnapshot("stopped"));
+    public Func<string, AwsResourceKind, string, ResourceControlAction, CancellationToken, Task> Send { get; set; } =
+        (_, _, _, _, _) => Task.CompletedTask;
+    public Task<ResourceControlSnapshot> ReadControlStateAsync(string region, AwsResourceKind kind, string id, CancellationToken token) =>
+        ControlState(region, kind, id, token);
+    public Task SendControlAsync(string region, AwsResourceKind kind, string id, ResourceControlAction action, CancellationToken token)
+    {
+        Sent++;
+        return Send(region, kind, id, action, token);
+    }
     public bool ExpireOnVerify { get; set; }
     public Func<string, CancellationToken, Task<IReadOnlyList<Ec2InstanceResource>>> Ec2 { get; set; } =
         (_, _) => Task.FromResult<IReadOnlyList<Ec2InstanceResource>>([]);
@@ -325,13 +654,22 @@ sealed class FakeQuery : IAwsResourceQuery
 
 sealed class FakeGroupStore : IServiceGroupStore
 {
+    public List<ServiceGroup> Groups { get; set; } = [];
+    public bool FailDelete { get; set; }
     public Task<IReadOnlyList<ServiceGroup>> LoadGroupsAsync(CancellationToken cancellationToken) =>
-        Task.FromResult<IReadOnlyList<ServiceGroup>>([]);
+        Task.FromResult<IReadOnlyList<ServiceGroup>>(Groups.ToArray());
     public Task AddGroupAsync(ServiceGroup group, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task DeleteGroupAsync(Guid groupId, CancellationToken cancellationToken)
+    {
+        if (FailDelete) throw new AppSettingsException("테스트 저장 실패");
+        Groups.RemoveAll(group => group.Id == groupId);
+        return Task.CompletedTask;
+    }
 }
 
 sealed class FakeConfirmation : IConfirmationService
 {
+    public bool Result { get; set; } = true;
     public Task<bool> ConfirmAsync(string title, string message, string confirmButtonText,
-        CancellationToken cancellationToken = default) => Task.FromResult(true);
+        CancellationToken cancellationToken = default) => Task.FromResult(Result);
 }

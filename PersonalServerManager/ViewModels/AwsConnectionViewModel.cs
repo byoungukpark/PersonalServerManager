@@ -325,7 +325,8 @@ public sealed class AwsConnectionViewModel : ViewModelBase
                !string.Equals(_connection.ActiveConnection?.ProfileName, SelectedProfile, StringComparison.Ordinal);
     }
 
-    private bool CanVerify() => !IsBusy && _connection.ActiveConnection is not null && !_connection.RequiresReconnect;
+    private bool CanVerify() => !IsBusy && _connection.ActiveConnection is not null &&
+        !_connection.RequiresReconnect && _connection.CanChangeConnection;
     private bool CanDisconnect() => !IsBusy && _connection.ActiveConnection is not null && _connection.CanChangeConnection;
 
     private void BeginBusy(string message)
