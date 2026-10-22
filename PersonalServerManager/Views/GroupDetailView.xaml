@@ -1,13 +1,12 @@
 <UserControl x:Class="PersonalServerManager.Views.GroupDetailView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:oxy="http://oxyplot.org/wpf"
+             xmlns:views="clr-namespace:PersonalServerManager.Views"
              Foreground="{StaticResource PrimaryTextBrush}">
     <UserControl.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <ResourceDictionary Source="Styles/ResourceDiscovery.xaml" />
-                <ResourceDictionary Source="Styles/GroupMonitoring.xaml" />
             </ResourceDictionary.MergedDictionaries>
             <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
         </ResourceDictionary>
@@ -18,7 +17,7 @@
                 <StackPanel DockPanel.Dock="Left">
                     <TextBlock Text="{Binding Name}" FontSize="27" FontWeight="SemiBold"
                                Foreground="{StaticResource PrimaryTextBrush}" />
-                    <TextBlock Text="저장된 그룹 구성과 등록 자원의 기본 AWS 상태입니다."
+                    <TextBlock Text="저장된 그룹 구성, 기본 AWS 상태와 CloudWatch 지표를 확인합니다."
                                Margin="0,7,0,0" Foreground="{StaticResource MutedTextBrush}" />
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
@@ -119,6 +118,10 @@
                     </StackPanel>
                 </Border>
 
+                <TabControl SelectedIndex="{Binding SelectedContentTabIndex}"
+                            Style="{StaticResource ResourceTabControlStyle}">
+                    <TabItem Header="리소스 상세 · 개별 제어">
+                        <StackPanel>
                 <Border Style="{StaticResource SurfaceCardStyle}" Padding="24" Margin="0,0,0,18">
                     <StackPanel>
                         <TextBlock Text="등록 리소스" FontSize="18" FontWeight="SemiBold"
@@ -174,85 +177,18 @@
                         <GridSplitter Grid.Row="1" Height="8" HorizontalAlignment="Stretch"
                                       Background="{StaticResource StrokeBrush}" />
                         <Border Grid.Row="2" Background="{StaticResource SubtleSurfaceBrush}" Padding="16">
-                            <TabControl SelectedIndex="{Binding SelectedDetailTabIndex}"
-                                        Style="{StaticResource ResourceTabControlStyle}">
-                                <TabItem Header="기본 정보">
-                                    <StackPanel>
-                                        <TextBlock Text="{Binding SelectionMessage}" TextWrapping="Wrap" Margin="0,0,0,12" />
-                                        <StackPanel Orientation="Horizontal"
-                                                    Visibility="{Binding IsControlSelection, Converter={StaticResource BooleanToVisibilityConverter}}">
-                                            <Button Content="시작" Command="{Binding StartCommand}" Margin="0,0,8,0"
-                                                    Style="{StaticResource SecondaryButtonStyle}" />
-                                            <Button Content="중지" Command="{Binding StopCommand}" Margin="0,0,8,0"
-                                                    Style="{StaticResource SecondaryButtonStyle}" />
-                                            <Button Content="재부팅 (EC2)" Command="{Binding RebootCommand}"
-                                                    Style="{StaticResource SecondaryButtonStyle}" />
-                                        </StackPanel>
-                                    </StackPanel>
-                                </TabItem>
-                                <TabItem Header="모니터링">
-                                    <StackPanel>
-                                        <DockPanel Margin="0,0,0,8">
-                                            <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
-                                                <ComboBox ItemsSource="{Binding MetricRanges}"
-                                                          SelectedItem="{Binding SelectedMetricRange}"
-                                                          DisplayMemberPath="Label" Width="105" Margin="0,0,8,0"
-                                                          Style="{StaticResource AppComboBoxStyle}"
-                                                          IsEnabled="{Binding IsTimeRangeEnabled}" />
-                                                <Button Content="지표 새로고침" Command="{Binding RefreshMetricsCommand}"
-                                                        Style="{StaticResource SecondaryButtonStyle}" />
-                                            </StackPanel>
-                                            <TextBlock Text="{Binding MetricStatusMessage}" VerticalAlignment="Center"
-                                                       TextWrapping="Wrap" Foreground="{StaticResource SecondaryTextBrush}" />
-                                        </DockPanel>
-                                        <TextBlock Text="S3 저장량·객체 수는 일 단위로 수집됩니다. 선택 시간 범위와 관계없이 최근 자료를 표시합니다."
-                                                   Margin="0,0,0,8" TextWrapping="Wrap"
-                                                   Foreground="{StaticResource MutedTextBrush}">
-                                            <TextBlock.Style>
-                                                <Style TargetType="{x:Type TextBlock}">
-                                                    <Setter Property="Visibility" Value="Collapsed" />
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IsTimeRangeEnabled}" Value="False">
-                                                            <Setter Property="Visibility" Value="Visible" />
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
-                                        <TextBlock Text="{Binding MetricErrorMessage}" TextWrapping="Wrap"
-                                                   Foreground="{StaticResource ErrorBrush}" Margin="0,0,0,8"
-                                                   Visibility="{Binding HasMetricError, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                                        <ScrollViewer MaxHeight="470" VerticalScrollBarVisibility="Auto"
-                                                      HorizontalScrollBarVisibility="Disabled">
-                                            <ItemsControl ItemsSource="{Binding MetricCharts}">
-                                                <ItemsControl.ItemsPanel>
-                                                    <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
-                                                </ItemsControl.ItemsPanel>
-                                                <ItemsControl.ItemTemplate>
-                                                    <DataTemplate>
-                                                        <Border Style="{StaticResource MetricCardStyle}" Width="420">
-                                                            <StackPanel>
-                                                                <TextBlock Text="{Binding Title}" FontWeight="SemiBold" />
-                                                                <TextBlock Text="{Binding LatestText}" FontSize="17"
-                                                                           Foreground="{StaticResource AccentBrush}"
-                                                                           Margin="0,6,0,2" TextWrapping="Wrap" />
-                                                                <TextBlock Text="{Binding MeasuredAtText}" FontSize="12"
-                                                                           Foreground="{StaticResource SecondaryTextBrush}" />
-                                                                <TextBlock Text="{Binding StatusText}" FontSize="12"
-                                                                           TextWrapping="Wrap" Margin="0,5,0,0"
-                                                                           Foreground="{StaticResource MutedTextBrush}" />
-                                                                <oxy:PlotView Model="{Binding Plot}" Height="190" Margin="0,10,0,0"
-                                                                              Background="{StaticResource SurfaceBrush}"
-                                                                              Visibility="{Binding HasData, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                                                            </StackPanel>
-                                                        </Border>
-                                                    </DataTemplate>
-                                                </ItemsControl.ItemTemplate>
-                                            </ItemsControl>
-                                        </ScrollViewer>
-                                    </StackPanel>
-                                </TabItem>
-                            </TabControl>
+                            <StackPanel>
+                                <TextBlock Text="{Binding SelectionMessage}" TextWrapping="Wrap" Margin="0,0,0,12" />
+                                <StackPanel Orientation="Horizontal"
+                                            Visibility="{Binding IsControlSelection, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <Button Content="시작" Command="{Binding StartCommand}" Margin="0,0,8,0"
+                                            Style="{StaticResource SecondaryButtonStyle}" />
+                                    <Button Content="중지" Command="{Binding StopCommand}" Margin="0,0,8,0"
+                                            Style="{StaticResource SecondaryButtonStyle}" />
+                                    <Button Content="재부팅 (EC2)" Command="{Binding RebootCommand}"
+                                            Style="{StaticResource SecondaryButtonStyle}" />
+                                </StackPanel>
+                            </StackPanel>
                         </Border>
                         </Grid>
                     </StackPanel>
@@ -291,6 +227,12 @@
                         </DataGrid>
                     </StackPanel>
                 </Border>
+                        </StackPanel>
+                    </TabItem>
+                    <TabItem Header="그룹 모니터링">
+                        <views:GroupMonitoringView DataContext="{Binding Monitoring}" />
+                    </TabItem>
+                </TabControl>
             </StackPanel>
         </StackPanel>
     </ScrollViewer>

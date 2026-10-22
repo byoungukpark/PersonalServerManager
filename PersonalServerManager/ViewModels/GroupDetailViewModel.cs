@@ -46,6 +46,7 @@ public sealed partial class GroupDetailViewModel : ViewModelBase
     private string _statusMessage = "AWS 상태 확인 전";
     private bool _hasAccessIssue;
     private bool _isStatusRefreshing;
+    private int _selectedContentTabIndex;
 
     public GroupDetailViewModel(NavigationService navigation, ServiceGroupService groups, GroupStatusService status,
         IConfirmationService confirmation, ResourceControlService? control = null,
@@ -56,8 +57,7 @@ public sealed partial class GroupDetailViewModel : ViewModelBase
         _groups = groups;
         _status = status;
         _control = control;
-        _metrics = metrics;
-        _metricRefreshCommand = new AsyncRelayCommand(RefreshMetricsAsync, CanRefreshMetrics, ShowMetricError);
+        Monitoring = new GroupMonitoringViewModel(metrics);
         _navigation.PropertyChanged += OnNavigationChanged;
         BackToDashboardCommand = new RelayCommand(_ => navigation.NavigateTo(AppPage.Dashboard));
         OpenManagementCommand = new RelayCommand(_ =>
@@ -94,6 +94,16 @@ public sealed partial class GroupDetailViewModel : ViewModelBase
     }
 
     public ICommand BackToDashboardCommand { get; }
+    public GroupMonitoringViewModel Monitoring { get; }
+    public int SelectedContentTabIndex
+    {
+        get => _selectedContentTabIndex;
+        set
+        {
+            if (SetProperty(ref _selectedContentTabIndex, value))
+                Monitoring.SetActive(value == 1 && _navigation.CurrentPage == AppPage.GroupDetail);
+        }
+    }
     public ICommand OpenManagementCommand { get; }
     public event Action<Guid>? ManageGroupRequested;
     public ICommand GoToConnectionCommand { get; }
@@ -107,6 +117,7 @@ public sealed partial class GroupDetailViewModel : ViewModelBase
     public bool IsControlRunning => _control?.Activity.IsControlRunning == true;
     public bool CanOpenManagement => HasGroup && !IsLoading && !IsDeleting && !IsControlRunning;
     public bool IsControlSelection => SelectedResource is { Kind: "EC2" or "RDS" };
+    public double ResourcePanelHeight => 500;
     public string SelectionMessage => SelectedResource is null ? "리소스를 선택하세요." :
         SelectedResource.Kind == "S3" ? "S3는 조회만 제공하며 시작·중지 대상이 아닙니다." :
         $"{SelectedResource.Name} · {SelectedResource.Id} · {SelectedResource.Status}";
@@ -115,13 +126,10 @@ public sealed partial class GroupDetailViewModel : ViewModelBase
         get => _selectedResource;
         set
         {
-            var previous = _selectedResource;
             if (!SetProperty(ref _selectedResource, value)) return;
             OnPropertyChanged(nameof(SelectionMessage));
             OnPropertyChanged(nameof(IsControlSelection));
             RefreshControlCommands();
-            if (previous?.Kind != value?.Kind || previous?.Id != value?.Id)
-                OnMetricSelectionChanged();
         }
     }
     public int SelectedServiceIndex
@@ -270,8 +278,7 @@ public sealed partial class GroupDetailViewModel : ViewModelBase
         var version = ++_loadVersion;
         if (!sameGroup)
         {
-            CancelMetricRefresh();
-            ClearMetrics();
+            Monitoring.SetGroup(null);
             SetGroup(null);
             Resources = [];
             StartOrder = [];
@@ -297,6 +304,7 @@ public sealed partial class GroupDetailViewModel : ViewModelBase
             }
 
             SetGroup(group);
+            Monitoring.SetGroup(group);
             Resources = group.Resources
                 .OrderBy(resource => resource.Kind)
                 .ThenBy(resource => resource.Name, StringComparer.OrdinalIgnoreCase)
@@ -352,12 +360,14 @@ public sealed partial class GroupDetailViewModel : ViewModelBase
         if (result.AccessMessage is { } access)
         {
             HasAccessIssue = true;
+            Monitoring.SetAccessIssue(true);
             StatusMessage = access;
             Resources = Resources.Select(row => row with { Status = "조회 대기" }).ToArray();
             return;
         }
 
         HasAccessIssue = false;
+        Monitoring.SetAccessIssue(false);
         var messages = new List<string>();
         var rows = Resources.ToArray();
         foreach (var service in result.Services)
@@ -418,8 +428,7 @@ public sealed partial class GroupDetailViewModel : ViewModelBase
             await _groups.DeleteAsync(group.Id, cancellationToken);
             // 삭제 전에 시작한 상태 조회가 나중에 도착해도 화면에 반영하지 않는다.
             _loadVersion++;
-            CancelMetricRefresh();
-            ClearMetrics();
+            Monitoring.SetGroup(null);
             _groupId = null;
             SetGroup(null);
             Resources = [];
@@ -525,4 +534,15 @@ public sealed partial class GroupDetailViewModel : ViewModelBase
         AwsResourceKind.S3 => "S3",
         _ => kind.ToString()
     };
+
+    public Task RefreshMetricsIfDueAsync() => Monitoring.RefreshIfDueAsync();
+    public void ResetMetricsForConnection() => Monitoring.ResetForConnection();
+    public void CancelMetricRefresh() => Monitoring.Cancel();
+
+    private void OnNavigationChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName != nameof(NavigationService.CurrentPage)) return;
+        Monitoring.SetActive(_navigation.CurrentPage == AppPage.GroupDetail && SelectedContentTabIndex == 1);
+        if (_navigation.CurrentPage != AppPage.GroupDetail) IsStatusRefreshing = false;
+    }
 }

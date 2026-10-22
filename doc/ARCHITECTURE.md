@@ -6,7 +6,7 @@
 
 현재는 단일 `net10.0-windows` WPF 프로젝트에 MVVM 화면, AWS 프로필 연결·읽기 조회, 그룹 생성과 JSON 저장·복원, 기본 상태 표시가 구현되어 있다. `App.OnStartup`에서 객체를 직접 조립하고 메인 창을 생성한다. 별도 `PersonalServerManager.SmokeTests` 프로젝트에는 로컬 모의 조회와 WPF 화면 생성 검증이 있다.
 
-2026-10-21 사용자 요청으로 기존 4계층 폴더를 화면·모델·서비스 중심으로 단순화했다. Phase 1 Day 1은 사용자 수동 확인을 반영해 완료 게이트를 통과했고 로컬 그룹 삭제도 구현했다. 현재 Day 2 개별 EC2/RDS 제어를 구현 중이며, 그룹 시퀀스와 Phase 2는 아직 시작하지 않았다. 현재 상태·검증 결과는 PROGRESS.md를 따른다.
+2026-10-21 사용자 요청으로 기존 4계층 폴더를 화면·모델·서비스 중심으로 단순화했다. Phase 1 Day 1은 사용자 수동 확인을 반영해 완료 게이트를 통과했고 로컬 그룹 삭제도 구현했다. 현재 Phase 2의 그룹 편집·CloudWatch 모니터링까지 구현했으며, 자세한 단계·검증 상태는 PROGRESS.md를 따른다.
 
 ## 2. 역할과 의존성
 
@@ -63,12 +63,12 @@ PersonalServerManager/
 | 기능 서비스 | `ControlCoordinator`, `ControlSession` | 앱 전체 제어 1건 제한, 순차 계획 실행, 취소·진행·종료 신호와 결과 공유. 앱 수명 |
 | 기능 서비스 | `IResourceControlAdapter` | EC2/RDS 공통 `현재 상태 조회 → 명령 제출 → 목표 상태 확인` 계약. S3는 구현하지 않음 |
 | 기능 서비스 | `RefreshCoordinator` | 기본 상태·Health·지표의 주기 작업과 화면별 구독/중단 관리. 앱 수명 |
-| 기능 서비스 | `MonitoringService`, `HealthCheckService`, `CloudWatchLogsService` | Phase 2 지표 조회, 앱별 점검 판정, 로그 수동 조회·필터 |
+| 기능 서비스 | `MonitoringService`, `HealthCheckService`, `CloudWatchLogsService` | Phase 2 지표 조회·앱별 점검 판정. 로그 수동 조회·필터는 후속 FR-011에서 도입 |
 | 기능 서비스 | `IControlHistoryRepository` | 작업/단계 이력 저장·검색·만료 정리 경계. Phase 2 도입 |
 | 외부 연동 구현 | `AwsProfileProvider`, `StsIdentityGateway`, `AwsClientFactory` | 로컬 프로필 목록, `GetCallerIdentity`, 활성 자격 증명·그룹 리전별 클라이언트 생성/해제 |
 | 외부 연동 구현 | `Ec2Gateway`, `RdsGateway`, `S3Gateway` | 페이지네이션 포함 서비스별 목록/상태 조회와 지원되는 명령. 제어 어댑터는 EC2/RDS만 |
 | 외부 연동 구현 | `Ec2ControlAdapter`, `RdsControlAdapter` | `IResourceControlAdapter` 구현; 서비스별 명령·상태 매핑과 폴링에 필요한 상태 조회 |
-| 외부 연동 구현 | `CloudWatchMetricGateway`, `CloudWatchLogsGateway`, `HealthHttpClient` | Phase 2 측정값, 로그 그룹·이벤트, 인증 없는 HTTP/HTTPS Health 조회 |
+| 외부 연동 구현 | `CloudWatchMetricGateway`, `CloudWatchLogsGateway`, `HealthHttpClient` | Phase 2 측정값·인증 없는 HTTP/HTTPS Health 조회. 로그 그룹·이벤트 연동은 후속 FR-011 |
 | 외부 연동 구현 | `JsonSettingsRepository`, `SqliteControlHistoryRepository` | JSON 원자적 저장·검증, SQLite 작업/단계 이력. SQLite는 Phase 2 |
 
 `IResourceControlAdapter`는 `ResourceKind`별 구현을 명시적으로 선택한다. 각 구현은 AWS API 호출과 상태 매핑만 담당하고 시퀀스 순서·확인 모달·전역 동시 실행 정책은 `ControlCoordinator`가 담당한다. EC2 재부팅은 개별 명령으로만 취급하고 그룹 시작·중지 순서에는 넣지 않는다.
@@ -139,9 +139,16 @@ SQLite 제공 라이브러리와 AWS SDK 패키지는 구현 단계에서 필요
 
 ## 9. 자동 갱신, CloudWatch, Health, Logs
 
+2026-10-22 사용자 결정: `CloudWatchLogsService`와 `CloudWatchLogsGateway`의 아래 설계는 FR-011 후속 구현을 위한 기록이다. 현재 Phase 2에서는 만들지 않으며, `로그 설정` 안내 화면을 유지한다.
+
+- **2026-10-22 추가 설계(구현):** FR-009의 EC2 4종·RDS 6종·S3 2종을 지표별 독립 카드로 제공한다. 기존 조회 정의·카드 팩토리를 확장하며 EC2 송수신 카드를 분리한다. StatusCheckFailed는 Maximum 및 0/1 상태 표시, RDS 메모리·공간은 바이트 표시, 읽기/쓰기 지연은 초→ms 변환을 적용한다. 지원되지 않거나 발행되지 않은 지표는 데이터 없음으로 구분한다.
+- **배치·입력 설계(구현):** 모니터링 ViewModel의 배치 선택에 따라 그리드 2열 또는 스택 1열로 카드 너비를 가용 영역에 맞춘다. 기존 WrapPanel·420 고정 너비를 대체했다. OxyPlot 축/입력 제어에서 확대·축소와 이동을 비활성화하고 툴팁·상위 화면 세로 스크롤은 유지한다. 배치 전환 시에도 PlotView별 별도 PlotModel 생성 원칙을 유지한다.
+- **상태 검사 표시 설계(구현):** 최신 측정값으로 정상(0)/실패(1) 배지를 결정하고, Maximum 집계 결과를 0·1 계단형 계열로 그린다. 측정값이 없으면 별도 `데이터 없음` 배지를 사용하고 0선을 만들지 않는다. 배치 전환은 조회를 다시 수행하지 않고 기존 카드 데이터를 재배치한다.
+
 - `RefreshCoordinator`는 앱 수명 취소 토큰을 갖고 연결·계정 일치 그룹 전체의 EC2/RDS 기본 상태와 S3 조회 가능 여부를 **30초**마다 갱신한다. 화면을 이동해도 이 기본 갱신은 유지한다. 앱 종료·연결 해제·치명적 인증 오류에서는 중단하며 재연결 시 다시 시작한다. 해당 계정이 아닌 그룹은 로컬 정보만 유지한다.
 - 활성 그룹의 EC2/RDS CloudWatch 지표는 **5분**마다, 화면에서 선택한 시간 범위(1/3/12/24시간)에 맞춰 조회한다. 상세 화면에서 이탈하면 상세 지표 구독과 진행 중 불필요한 조회를 취소한다. S3 저장량·객체 수는 일 단위 지표의 지연을 고려해 별도 캐시하며 0과 데이터 없음/지연을 구분한다.
 - 그룹 상세의 `리소스 상세 · 개별 제어`는 기존 EC2/RDS/S3 선택·기본 정보·명령을 담당한다. 별도 `그룹 모니터링` 탭은 등록 리소스 전체의 지표를 리소스별 카드 목록으로 표시한다. 카드 데이터는 기존 CloudWatch 조회 경로를 재사용하고, 새 지표는 카드 항목을 추가하는 방식으로 확장한다. 조회·오류·취소 상태는 리소스별로 구분해 한 카드의 실패가 다른 카드의 결과를 지우지 않게 한다. 그룹 전환·화면 이탈·연결 변경 시 이전 요청의 늦은 응답을 폐기한다.
+- 현재 구현은 `App.OnStartup`에서 `AwsCloudWatchMetricQuery`를 만들고 `GroupDetailViewModel` 생성자에 전달한다. 상세 ViewModel은 상단 탭·그룹 전환을 조율하고 `GroupMonitoringViewModel`은 등록 자원 카드 목록·시간 범위·갱신/취소를 관리한다. 각 `ResourceMetricCardViewModel`은 그래프·오류·마지막 정상값을 관리하며, `MetricChartFactory`가 조회 결과를 OxyPlot 카드 모델로 변환한다.
 - `HealthCheckService`는 등록 앱마다 기본 **30초** 주기 점검을 수행한다. 인증 없는 HTTP/HTTPS URL, 기본 2xx 판정, 선택적 JSON/`status=UP` 검사를 지원한다. HTTP 오류/본문 불일치는 비정상, 연결 실패/시간 초과는 별도 상태다. 설정 제한시간은 3/5/10/15초(기본 5초)다. 앱별 수동·전체 수동 점검은 같은 진행 중 요청을 중복 실행하지 않는다. 최신 및 최근 10회 결과는 앱 수명 메모리에만 둔다.
 - `CloudWatchLogsService`는 사용자가 선택한 **한 로그 그룹**과 선택적 스트림·기간으로 수동 조회한다. 기본 전체 스트림, 최근 1시간, 최대 최근 100건을 화면에 제공한다. 가져온 결과의 키워드/레벨 필터는 로컬에서 하고, 서버 측 검색은 사용자가 명시적으로 실행한 별도 AWS 요청이다. 화면 이동 시 진행 중 로그 요청은 취소할 수 있으나 그룹별 검색 조건은 앱 수명 메모리에 유지한다. 자동 로그 폴링은 하지 않는다.
 - 일시적 네트워크/서비스 오류는 영역별 오류로 남기고 다음 정기 주기에 재시도한다. SDK 자체의 제한된 재시도 외 무한 재시도 루프를 만들지 않는다. 권한 부족은 해당 서비스만 실패 처리하고, 인증 무효는 자동 AWS 갱신 전체를 멈춘다. 수동 재시도는 언제나 오류와 로딩 상태를 갱신한다. 구체 백오프 횟수는 §13의 검토 항목이다.
@@ -154,7 +161,8 @@ SQLite 제공 라이브러리와 AWS SDK 패키지는 구현 단계에서 필요
 | `DashboardView` ↔ `DashboardViewModel` | 그룹 카드, 검색·정렬, 전체/카드 갱신, 빈 상태 | Phase 1 Day 1 |
 | `AwsConnectionView` ↔ `AwsConnectionViewModel` | 명시적 프로필 연결·전환·해제, STS 확인 결과 | Phase 1 Day 1 |
 | `GroupWizardView` ↔ `GroupWizardViewModel` | 5단계 메모리 초안, 자원 선택, 시작 순서, 등록 후 성공 화면 | Phase 1 Day 1 |
-| `GroupDetailView` ↔ `GroupDetailViewModel` | 그룹 계정 게이트, EC2/RDS/S3 기본 상태·제어, Phase 2 지표·Health·로그 | Phase 1 Day 1~2, Phase 2 확장 |
+| `GroupDetailView` ↔ `GroupDetailViewModel` | 상단 탭·그룹 전환, 계정 게이트, EC2/RDS/S3 기본 상태·제어 | Phase 1 Day 1~2, Phase 2 확장 |
+| `GroupMonitoringView` ↔ `GroupMonitoringViewModel` | 그룹 전체 지표 카드·범위·갱신·취소; 자원별 카드는 `ResourceMetricCardViewModel` | Phase 2 / 2.2 |
 | `GroupManagementView` ↔ `GroupManagementViewModel` | 5개 관리 탭, 변경 비교·확인, 저장/이탈 경고 | Phase 2 |
 | `HistoryView` ↔ `HistoryViewModel` | SQLite 작업/단계 검색·필터 | Phase 2 |
 | `SettingsView` ↔ `SettingsViewModel` | 보존 기간과 Health/제어 제한시간, 창 설정 | Phase 2 |
@@ -195,7 +203,7 @@ SQLite 제공 라이브러리와 AWS SDK 패키지는 구현 단계에서 필요
 
 AWS SDK 클라이언트를 직접 ViewModel에서 Mock하지 않는다. 기능 서비스 경계에 Fake 게이트웨이·어댑터를 주입해 서비스 동작을 검증하고, 외부 연동 구현의 SDK 매핑은 별도 소규모 테스트 또는 승인된 읽기 실환경 검증으로 확인한다. 실제 AWS 시작·중지·재부팅 검증은 `AGENTS.md`와 개발 계획에 따라 사용자가 대상과 작업을 승인한 경우에만 수행하고 모의 검증과 결과를 구분한다.
 
-첫 구현 순서는 `App` 객체 조립과 셸/내비게이션 → JSON 설정 모델·검증·저장소 → 전역 연결 세션·STS → 그룹 생성/조회·대시보드 → 전역 제어 코디네이터와 EC2/RDS 어댑터다. 이후 계획에 따라 Phase 2 저장·모니터링·로그를 확장한다.
+첫 구현 순서는 `App` 객체 조립과 셸/내비게이션 → JSON 설정 모델·검증·저장소 → 전역 연결 세션·STS → 그룹 생성/조회·대시보드 → 전역 제어 코디네이터와 EC2/RDS 어댑터다. 현재 범위는 모니터링·Health·제어 이력까지 확장하고, CloudWatch Logs는 FR-011 후속 구현 때 추가한다.
 
 ## 13. 핵심 결정과 남은 검토 항목
 
@@ -213,7 +221,7 @@ AWS SDK 클라이언트를 직접 ViewModel에서 Mock하지 않는다. 기능 �
 1. `REQUIREMENTS.md` §14에 남아 있는 S3 버킷 리전·일 단위 지표 캐시 및 API 비용·권한 세부 정책.
 2. AWS API 오류별 제한된 재시도 횟수·백오프, 상태 전환 폴링 간격, EC2/RDS 사용자 입력 제한시간의 허용 범위.
 3. Phase 2 SQLite 기록 실패 시 새 제어를 허용할지 여부와 중단된 작업의 재실행 후 표시 정책. 기록 손실이 안전·감사 경험에 영향을 주므로 구현 전에 사용자 결정을 받는다.
-4. CloudWatch 그래프용 WPF 오픈소스 패키지의 최종 선택과 라이선스·MVVM 호환성 확인.
+4. CloudWatch 그래프는 OxyPlot.Wpf를 사용한다. 실제 앱 조작과 AWS 지표 응답은 `PROGRESS.md`의 미확인 항목을 따른다.
 5. `DEVELOPMENT_PLAN.md` Day 1의 “프로필 이름” 저장 문구는 저장 위치를 특정하지 않는다. `REQUIREMENTS.md` `FR-001.1/013`의 명시적 정책에 따라 이 설계는 **마지막 선택 프로필을 앱 설정에 저장**하고 그룹별 자동 프로필 연결을 만들지 않는다.
 
 Phase 3의 그룹별 동시 프로필, 병렬 제어, 인증 Health, 복수 로그 그룹 통합 검색은 별도 요구사항·우선순위 확정 후 경계를 확장한다. 현재 구조에 이를 위한 빈 구현이나 복잡한 플러그인 체계를 추가하지 않는다.
@@ -230,4 +238,4 @@ Phase 3의 그룹별 동시 프로필, 병렬 제어, 인증 Health, 복수 로�
 - EC2 5초·RDS 15초 주기로 목표 상태를 확인한다. EC2 1~60분·RDS 1~120분(기본 10/30분)은 `appSettings.controlTimeouts`에 저장하며 기존 설정이 없으면 기본값을 적용한다. 실행 시작 시 설정을 고정한다. 실패/시간 초과 후 최대 10초의 읽기 재확인을 한 번 시도하며 명령을 반복하지 않는다.
 - EC2 재부팅은 사용자 합의대로 요청 접수만 표시하고 완료 여부는 미확인으로 남긴다. AWS `running` 상태를 재부팅 완료의 증거로 사용하지 않는다.
 - `ControlActivityState`를 셸 하단에 직접 바인딩하고 최근 결과 최대 5건을 메모리에 유지한다. 종료 경고, 제어 중 연결 전환·해제·재확인 및 그룹 삭제 차단을 적용한다. 화면을 이동해도 제어는 앱 수명의 서비스에서 계속된다.
-- `SettingsViewModel`과 `SettingsView`는 제어 제한시간을 제공한다. `ResourceControlService`가 개별·그룹 제어의 공통 상태 확인/명령 전송/목표 상태 대기 로직을 사용하고, 그룹 계획은 저장 순서 또는 역순으로 실행한다. `ControlActivityState`는 단계별 진행과 남은 작업 취소 요청을 앱 전체 화면에 공유한다. SQLite 영구 이력·Health/로그/모니터링은 미구현이다.
+- `SettingsViewModel`과 `SettingsView`는 제어 제한시간을 제공한다. `ResourceControlService`가 개별·그룹 제어의 공통 상태 확인/명령 전송/목표 상태 대기 로직을 사용하고, 그룹 계획은 저장 순서 또는 역순으로 실행한다. `ControlActivityState`는 단계별 진행과 남은 작업 취소 요청을 앱 전체 화면에 공유한다. SQLite 영구 이력·Health/로그는 미구현이며, 모니터링의 실제 AWS 검증은 남아 있다.

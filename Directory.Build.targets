@@ -1,0 +1,9 @@
+<Project>
+  <!-- 앱과 Mock 프로젝트에서 Windows 앱 제어가 차단하는 AWS 분석기만 제외한다. SDK 본체는 유지한다. -->
+  <Target Name="ExcludeAwsSdkAnalyzers" BeforeTargets="CoreCompile;MarkupCompilePass1">
+    <ItemGroup>
+      <Analyzer Remove="@(Analyzer)"
+                Condition="$([System.String]::Copy('%(Analyzer.NuGetPackageId)').StartsWith('AWSSDK.'))" />
+    </ItemGroup>
+  </Target>
+</Project>

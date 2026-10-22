@@ -29,7 +29,8 @@ var checks = new List<(string Name, Func<Task> Run)>
     ("그룹 편집 확인·자원 누락·저장 복원", GroupEditingPersistenceAsync),
     ("그룹 편집 중복·계정·저장 실패 차단", GroupEditingGuardsAsync),
     ("대시보드·그룹 상세 WPF 화면 생성", WpfViewsAsync),
-    ("CloudWatch 지표 게이트·선택 변경·시간 범위", MetricMonitoringAsync),
+    ("그룹 그래프 화면 이탈·재진입", MetricReentryViewAsync),
+    ("CloudWatch 그룹 카드·범위·오류·취소", MetricMonitoringAsync),
     ("30초 상태 결과 상세 화면 공유", SharedStatusAsync)
 };
 
@@ -515,14 +516,10 @@ static async Task MetricMonitoringAsync()
     var session = factory.LastSession!;
     var group = Group();
     var query = new AwsCloudWatchMetricQuery(connection);
-    var calls = 0;
-    TimeSpan lastRange = default;
-    string? lastRegion = null;
+    var calls = new List<(AwsResourceKind Kind, TimeSpan Range, string Region)>();
     session.Metrics = (resource, range, _) =>
     {
-        calls++;
-        lastRange = range;
-        lastRegion = resource.Region;
+        calls.Add((resource.Kind, range, resource.Region));
         return Task.FromResult(MetricSample(resource.Kind));
     };
 
@@ -532,73 +529,96 @@ static async Task MetricMonitoringAsync()
         throw new Exception("다른 계정의 CloudWatch 조회를 허용함");
     }
     catch (AwsConnectionException) { }
-    Check(calls == 0, "계정 게이트 앞에서 AWS 지표 요청");
+    Check(calls.Count == 0, "계정 게이트 앞에서 AWS 지표 요청");
 
     var navigation = new NavigationService();
     var groups = new ServiceGroupService(new FakeGroupStore { Groups = [group] });
     var status = new GroupStatusService(connection, new FakeQuery());
     var detail = new GroupDetailViewModel(navigation, groups, status, new FakeConfirmation(), null, query);
     navigation.Register(AppPage.GroupDetail, detail);
+    navigation.Register(AppPage.Dashboard, new DashboardViewModel(navigation, groups, status));
     navigation.NavigateTo(AppPage.GroupDetail);
     await detail.LoadAsync(group.Id);
-    detail.SelectedResource = detail.Resources.Single(row => row.Kind == "EC2");
-    detail.SelectedDetailTabIndex = 1;
-    await UntilAsync(() => detail.MetricCharts.Count == 2);
-    Check(calls == 1 && lastRange == TimeSpan.FromHours(1) && lastRegion == group.Region,
-        "선택 자원·기본 범위·그룹 리전 조회 오류");
-    Check(detail.MetricCharts[0].LatestText.Contains("35") && detail.MetricCharts[1].HasData,
-        "최신 지표 또는 그래프 데이터가 표시되지 않음");
-    Check(detail.MetricCharts[0].LatestText.Contains('%') &&
-          detail.MetricCharts[0].MeasuredAtText.Contains("AWS 측정 시각"), "단위·측정 시각 누락");
+    detail.SelectedContentTabIndex = 1;
+    await UntilAsync(() => detail.Monitoring.Cards.All(card => card.Charts.Count ==
+        (card.Resource.Kind == AwsResourceKind.Ec2 ? 4 : card.Resource.Kind == AwsResourceKind.Rds ? 6 : 2)));
+    Check(calls.Count == 3 && calls.Any(call => call.Kind == AwsResourceKind.S3 && call.Region == "us-east-1") &&
+          calls.Any(call => call.Kind == AwsResourceKind.Ec2 && call.Region == group.Region),
+        "그룹 전체 자원 또는 리전별 CloudWatch 조회 오류");
+    var ec2 = detail.Monitoring.Cards.Single(card => card.Resource.Kind == AwsResourceKind.Ec2);
+    var rds = detail.Monitoring.Cards.Single(card => card.Resource.Kind == AwsResourceKind.Rds);
+    var s3 = detail.Monitoring.Cards.Single(card => card.Resource.Kind == AwsResourceKind.S3);
+    Check(!ReferenceEquals(s3.Charts[1].PlotFactory!(), s3.Charts[1].PlotFactory!()),
+        "같은 그래프 카드가 PlotModel을 재사용함");
+    Check(ec2.Charts[0].LatestText.Contains("35") && ec2.Charts[0].MeasuredAtText.Contains("AWS 측정 시각"),
+        "최신 지표·측정 시각 누락");
+    var statusPlot = ec2.Charts[3].PlotFactory!();
+    Check(ec2.Charts[3].StatusBadge == "정상" &&
+          statusPlot.Series[0] is OxyPlot.Series.StairStepSeries steps &&
+          steps.Points[0].Y == 1 && steps.Points[1].Y == 0 &&
+          statusPlot.Axes.All(axis => !axis.IsPanEnabled && !axis.IsZoomEnabled) &&
+          rds.Charts[4].LatestText.Contains("ms"), "상태 검사 계단형 그래프 또는 RDS 지연 단위 누락");
 
-    detail.SelectedMetricRange = detail.MetricRanges[1];
-    await UntilAsync(() => calls == 2 && !detail.IsMetricsLoading);
-    Check(lastRange == TimeSpan.FromHours(3), "시간 범위 변경 뒤 재조회하지 않음");
+    detail.Monitoring.SelectedLayout = detail.Monitoring.MetricLayouts[1];
+    Check(detail.Monitoring.ChartColumns == 1 && calls.Count == 3,
+        "스택 전환이 카드 배치 외 지표 조회에 영향을 줌");
+    detail.Monitoring.SelectedLayout = detail.Monitoring.MetricLayouts[0];
+    Check(detail.Monitoring.ChartColumns == 2 && calls.Count == 3,
+        "그리드 전환이 지표를 다시 요청함");
+
+    detail.SelectedResource = detail.Resources.Single(row => row.Kind == "RDS");
+    Check(calls.Count == 3 && ec2.Charts.Count == 4, "개별 제어 리소스 선택이 그룹 지표 조회에 영향을 줌");
+    detail.Monitoring.SelectedRange = detail.Monitoring.MetricRanges[1];
+    await UntilAsync(() => calls.Count == 5 && !detail.Monitoring.IsRefreshing);
+    Check(calls.Where(call => call.Kind != AwsResourceKind.S3).All(call =>
+        call.Range == TimeSpan.FromHours(1) || call.Range == TimeSpan.FromHours(3)),
+        "시간 범위 변경 뒤 EC2/RDS 재조회 오류");
+    Check(calls.Count(call => call.Kind == AwsResourceKind.S3) == 1, "범위 변경 때 S3 캐시를 다시 조회함");
+
+    session.Metrics = (resource, _, _) => resource.Kind == AwsResourceKind.Rds
+        ? Task.FromException<IReadOnlyList<MetricSeries>>(
+            new AwsResourceQueryException(AwsQueryFailureKind.AccessDenied, "CloudWatch 조회 권한 없음"))
+        : Task.FromResult(MetricSample(resource.Kind));
+    await detail.Monitoring.RefreshAsync();
+    Check(rds.HasError && rds.Charts[1].HasData && rds.StatusMessage.Contains("이전 측정값") &&
+          ec2.Charts[0].HasData, "카드별 오류에서 이전값 또는 다른 자원 그래프를 보존하지 않음");
+
+    session.Metrics = (resource, _, _) => Task.FromResult<IReadOnlyList<MetricSeries>>(
+        resource.Kind == AwsResourceKind.Ec2
+            ? MetricSample(resource.Kind).Select(series => series.Key == "statusCheckFailed"
+                ? series with { Points = [new MetricPoint(DateTimeOffset.UtcNow, 1)] }
+                : series).ToArray()
+            : MetricSample(resource.Kind));
+    await detail.Monitoring.RefreshAsync();
+    Check(ec2.Charts[3].StatusBadge == "실패" && ec2.Charts[3].IsFailed,
+        "상태 검사 최신 실패값을 실패 배지로 표시하지 않음");
+
+    session.Metrics = (resource, _, _) => Task.FromResult<IReadOnlyList<MetricSeries>>(
+        resource.Kind == AwsResourceKind.Ec2
+            ? [new("cpu", "CPU 사용률", "%", []), new("networkIn", "수신", "B", []),
+               new("networkOut", "송신", "B", []), new("statusCheckFailed", "상태 검사", "개", [])]
+            : MetricSample(resource.Kind));
+    await detail.Monitoring.RefreshAsync();
+    Check(ec2.Charts.All(chart => !chart.HasData) && ec2.Charts[3].StatusBadge == "데이터 없음" &&
+          ec2.Charts[3].IsMissing && ec2.Charts[3].PlotFactory is null,
+        "빈 지표를 0으로 표시함");
 
     var delayed = new TaskCompletionSource<IReadOnlyList<MetricSeries>>(TaskCreationOptions.RunContinuationsAsynchronously);
     session.Metrics = (resource, _, _) => resource.Kind == AwsResourceKind.Ec2
         ? delayed.Task : Task.FromResult(MetricSample(resource.Kind));
-    detail.SelectedMetricRange = detail.MetricRanges[2];
-    await UntilAsync(() => detail.IsMetricsLoading);
-    detail.SelectedServiceIndex = 1;
-    detail.SelectedResource = detail.Resources.Single(row => row.Kind == "RDS");
-    await UntilAsync(() => detail.MetricCharts.Count == 2 && detail.MetricCharts[1].Title == "DB 연결 수");
+    var pending = detail.Monitoring.RefreshAsync();
+    await UntilAsync(() => ec2.IsLoading);
+    detail.SelectedContentTabIndex = 0;
     delayed.SetResult(MetricSample(AwsResourceKind.Ec2));
-    await Task.Yield();
-    Check(detail.MetricCharts[1].Title == "DB 연결 수", "이전 선택 자원의 늦은 응답이 화면을 덮음");
-
-    session.Metrics = (_, _, _) => Task.FromResult<IReadOnlyList<MetricSeries>>(
-        [new("cpu", "CPU 사용률", "%", []), new("connections", "DB 연결 수", "개", [])]);
-    await detail.RefreshMetricsAsync();
-    Check(detail.MetricCharts.All(card => !card.HasData && card.LatestText == "데이터 없음"),
-        "빈 지표를 0으로 표시함");
-
-    session.Metrics = (_, _, _) => Task.FromResult(MetricSample(AwsResourceKind.Rds));
-    await detail.RefreshMetricsAsync();
-    session.Metrics = (_, _, _) => Task.FromException<IReadOnlyList<MetricSeries>>(
-        new AwsResourceQueryException(AwsQueryFailureKind.AccessDenied, "CloudWatch 조회 권한 없음"));
-    await detail.RefreshMetricsAsync();
-    Check(detail.HasMetricError && detail.MetricCharts[1].HasData &&
-          detail.MetricStatusMessage.Contains("이전 측정값"), "권한 오류에서 이전 정상값을 보존하지 않음");
-
-    var s3Calls = 0;
-    session.Metrics = (resource, _, _) =>
-    {
-        if (resource.Kind == AwsResourceKind.S3) s3Calls++;
-        return Task.FromResult(MetricSample(resource.Kind));
-    };
-    detail.SelectedServiceIndex = 2;
-    detail.SelectedResource = detail.Resources.Single(row => row.Kind == "S3");
-    await UntilAsync(() => detail.MetricCharts.Count == 2 && detail.MetricCharts[1].Title == "객체 수");
-    detail.SelectedServiceIndex = 0;
-    detail.SelectedResource = detail.Resources.Single(row => row.Kind == "EC2");
-    await UntilAsync(() => detail.MetricCharts.Count == 2 && detail.MetricCharts[0].Title == "CPU 사용률");
-    detail.SelectedServiceIndex = 2;
-    detail.SelectedResource = detail.Resources.Single(row => row.Kind == "S3");
-    Check(s3Calls == 1 && detail.MetricCharts[1].Title == "객체 수", "S3 일 단위 캐시 재사용 실패");
-    detail.CancelMetricRefresh();
+    await pending;
+    Check(ec2.Charts.All(chart => !chart.HasData), "탭 이탈 후 늦은 지표가 카드에 반영됨");
+    detail.SelectedContentTabIndex = 1;
+    navigation.NavigateTo(AppPage.Dashboard);
+    navigation.NavigateTo(AppPage.GroupDetail);
+    await detail.LoadAsync(group.Id);
+    Check(s3.Charts[1].Title == "객체 수" && calls.Count(call => call.Kind == AwsResourceKind.S3) == 1,
+        "그룹 상세 재진입 때 S3 캐시 손실");
 }
-
 static IReadOnlyList<MetricSeries> MetricSample(AwsResourceKind kind)
 {
     var at = DateTimeOffset.UtcNow.AddMinutes(-2);
@@ -609,8 +629,14 @@ static IReadOnlyList<MetricSeries> MetricSample(AwsResourceKind kind)
     return kind == AwsResourceKind.Ec2
         ? [cpu,
             new MetricSeries("networkIn", "네트워크 수신", "B", [new MetricPoint(at, 4096)]),
-            new MetricSeries("networkOut", "네트워크 송신", "B", [new MetricPoint(at, 2048)])]
-        : [cpu, new MetricSeries("connections", "DB 연결 수", "개", [new MetricPoint(at, 4)])];
+            new MetricSeries("networkOut", "네트워크 송신", "B", [new MetricPoint(at, 2048)]),
+            new MetricSeries("statusCheckFailed", "상태 검사", "개",
+                [new MetricPoint(at.AddMinutes(-1), 1), new MetricPoint(at, 0)])]
+        : [cpu, new MetricSeries("connections", "DB 연결 수", "개", [new MetricPoint(at, 4)]),
+            new MetricSeries("freeableMemory", "가용 메모리", "B", [new MetricPoint(at, 1048576)]),
+            new MetricSeries("freeStorageSpace", "남은 저장 공간", "B", [new MetricPoint(at, 1073741824)]),
+            new MetricSeries("readLatency", "읽기 지연", "ms", [new MetricPoint(at, 2.5)]),
+            new MetricSeries("writeLatency", "쓰기 지연", "ms", [new MetricPoint(at, 3.5)])];
 }
 
 static async Task SharedStatusAsync()
@@ -888,7 +914,7 @@ static Task WpfViewsAsync()
             detail.LoadAsync(group.Id).GetAwaiter().GetResult();
             management.LoadAsync(group.Id).GetAwaiter().GetResult();
             detail.SelectedResource = detail.Resources.First(row => row.Kind == "EC2");
-            detail.SelectedDetailTabIndex = 1;
+            detail.SelectedContentTabIndex = 1;
             var settings = new SettingsViewModel(new JsonAppSettingsStore(), new FakeConfirmation(), new ControlTimeoutSettings());
             foreach (var view in new System.Windows.Controls.UserControl[]
                      { new DashboardView(), new GroupDetailView { DataContext = detail },
@@ -935,9 +961,79 @@ static Task WpfViewsAsync()
     return completion.Task;
 }
 
+static Task MetricReentryViewAsync()
+{
+    var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var thread = new Thread(() =>
+    {
+        try
+        {
+            if (System.Windows.Application.Current is null)
+            {
+                var app = new PersonalServerManager.App();
+                app.InitializeComponent();
+            }
+            var navigation = new NavigationService();
+            var group = Group();
+            var groups = new ServiceGroupService(new FakeGroupStore { Groups = [group] });
+            var factory = new FakeSessionFactory();
+            var connection = new AwsConnectionService(new FakeProfiles(), factory, new ControlActivityState());
+            connection.ConnectAsync("first", default).GetAwaiter().GetResult();
+            factory.LastSession!.Metrics = (resource, _, _) => Task.FromResult(MetricSample(resource.Kind));
+            var detail = new GroupDetailViewModel(navigation, groups,
+                new GroupStatusService(connection, new FakeQuery()), new FakeConfirmation(), null,
+                new AwsCloudWatchMetricQuery(connection));
+            navigation.Register(AppPage.GroupDetail, detail);
+            navigation.Register(AppPage.Dashboard, new PlaceholderViewModel("대시보드", ""));
+            navigation.NavigateTo(AppPage.GroupDetail);
+            detail.LoadAsync(group.Id).GetAwaiter().GetResult();
+            detail.SelectedContentTabIndex = 1;
+            var first = new GroupDetailView { DataContext = detail };
+            first.Measure(new System.Windows.Size(1280, 1800));
+            first.Arrange(new System.Windows.Rect(0, 0, 1280, 1800));
+            first.UpdateLayout();
+            var chartGrid = FindVisualChild<System.Windows.Controls.Primitives.UniformGrid>(first)
+                ?? throw new Exception("그래프 카드 배치를 찾지 못함");
+            Check(chartGrid.Columns == 2 && chartGrid.ActualWidth > 900,
+                "그리드가 두 열로 가용 너비를 사용하지 않음");
+            detail.Monitoring.SelectedLayout = detail.Monitoring.MetricLayouts[1];
+            first.UpdateLayout();
+            Check(chartGrid.Columns == 1 && chartGrid.Children.Count > 0 &&
+                  chartGrid.Children[0].RenderSize.Width > 900,
+                "스택이 한 열로 가용 너비를 사용하지 않음");
+            Check(detail.Monitoring.Cards.Any(card => card.Charts.Any(chart => chart.PlotFactory is not null)),
+                "첫 화면에 그래프가 생성되지 않음");
+
+            navigation.NavigateTo(AppPage.Dashboard);
+            navigation.NavigateTo(AppPage.GroupDetail);
+            var second = new GroupDetailView { DataContext = detail };
+            second.Measure(new System.Windows.Size(1280, 1800));
+            second.Arrange(new System.Windows.Rect(0, 0, 1280, 1800));
+            second.UpdateLayout();
+            completion.SetResult();
+        }
+        catch (Exception exception) { completion.SetException(exception); }
+    });
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+    return completion.Task;
+}
+
 static void Check(bool condition, string message)
 {
     if (!condition) throw new Exception(message);
+}
+
+static T? FindVisualChild<T>(System.Windows.DependencyObject root) where T : System.Windows.DependencyObject
+{
+    for (var index = 0; index < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); index++)
+    {
+        var child = System.Windows.Media.VisualTreeHelper.GetChild(root, index);
+        if (child is T match) return match;
+        var nested = FindVisualChild<T>(child);
+        if (nested is not null) return nested;
+    }
+    return null;
 }
 
 sealed class FakeProfiles : IAwsProfileProvider

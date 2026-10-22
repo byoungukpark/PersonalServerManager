@@ -112,6 +112,7 @@ public partial class App : System.Windows.Application
                     await dashboard.RefreshStatusesAsync();
                 else if (navigation.CurrentPage == AppPage.GroupDetail && groupDetail.CurrentGroupId is { } id)
                 {
+                    groupDetail.CancelMetricRefresh();
                     await groupDetail.LoadAsync(id);
                     groupDetail.ResetMetricsForConnection();
                 }

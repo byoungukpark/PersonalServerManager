@@ -8,4 +8,44 @@
         <Setter Property="Padding" Value="14" />
         <Setter Property="Margin" Value="0,0,10,10" />
     </Style>
+    <Style x:Key="MetricLayoutPickerStyle" TargetType="{x:Type ListBox}">
+        <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource StrokeBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Padding" Value="2" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style x:Key="MetricLayoutItemStyle" TargetType="{x:Type ListBoxItem}">
+        <Setter Property="Foreground" Value="{StaticResource SecondaryTextBrush}" />
+        <Setter Property="Padding" Value="12,5" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type ListBoxItem}">
+                    <Border x:Name="Background" Background="Transparent" CornerRadius="5" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="Background" Property="Background" Value="{StaticResource AccentBrush}" />
+                            <Setter Property="Foreground" Value="{StaticResource SurfaceBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="MetricStatusBadgeStyle" TargetType="{x:Type Border}">
+        <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+        <Setter Property="CornerRadius" Value="5" />
+        <Setter Property="Padding" Value="8,3" />
+        <Setter Property="Margin" Value="8,0,0,0" />
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding IsFailed}" Value="True">
+                <Setter Property="Background" Value="{StaticResource ErrorBrush}" />
+            </DataTrigger>
+            <DataTrigger Binding="{Binding IsMissing}" Value="True">
+                <Setter Property="Background" Value="{StaticResource MutedTextBrush}" />
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
 </ResourceDictionary>

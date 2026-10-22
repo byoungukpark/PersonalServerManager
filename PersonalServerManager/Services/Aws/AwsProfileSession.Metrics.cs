@@ -26,7 +26,11 @@ internal sealed partial class AwsProfileSession
             var definitions = CreateComputeDefinitions(resource, period);
             var data = await GetMetricDataAsync(client, definitions, end - range, end, cancellationToken);
             return definitions.Select(definition => new MetricSeries(
-                definition.Key, definition.Title, definition.Unit, data[definition.Key])).ToArray();
+                definition.Key, definition.Title, definition.Unit,
+                // RDS 지연 지표의 AWS 원본은 초 단위이며 화면에서는 ms로 표시한다.
+                definition.Key is "readLatency" or "writeLatency"
+                    ? data[definition.Key].Select(point => new MetricPoint(point.MeasuredAt, point.Value * 1000)).ToArray()
+                    : data[definition.Key])).ToArray();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -60,11 +64,26 @@ internal sealed partial class AwsProfileSession
                 "NetworkIn", "Sum", period, [new Dimension { Name = dimensionName, Value = resource.Id }]));
             definitions.Add(new MetricDefinition("networkOut", "네트워크 송신", "B", metricNamespace,
                 "NetworkOut", "Sum", period, [new Dimension { Name = dimensionName, Value = resource.Id }]));
+            definitions.Add(new MetricDefinition("statusCheckFailed", "상태 검사", "개", metricNamespace,
+                "StatusCheckFailed", "Maximum", period,
+                [new Dimension { Name = dimensionName, Value = resource.Id }]));
         }
         else
         {
             definitions.Add(new MetricDefinition("connections", "DB 연결 수", "개", metricNamespace,
                 "DatabaseConnections", "Average", period,
+                [new Dimension { Name = dimensionName, Value = resource.Id }]));
+            definitions.Add(new MetricDefinition("freeableMemory", "가용 메모리", "B", metricNamespace,
+                "FreeableMemory", "Average", period,
+                [new Dimension { Name = dimensionName, Value = resource.Id }]));
+            definitions.Add(new MetricDefinition("freeStorageSpace", "남은 저장 공간", "B", metricNamespace,
+                "FreeStorageSpace", "Average", period,
+                [new Dimension { Name = dimensionName, Value = resource.Id }]));
+            definitions.Add(new MetricDefinition("readLatency", "읽기 지연", "ms", metricNamespace,
+                "ReadLatency", "Average", period,
+                [new Dimension { Name = dimensionName, Value = resource.Id }]));
+            definitions.Add(new MetricDefinition("writeLatency", "쓰기 지연", "ms", metricNamespace,
+                "WriteLatency", "Average", period,
                 [new Dimension { Name = dimensionName, Value = resource.Id }]));
         }
 
