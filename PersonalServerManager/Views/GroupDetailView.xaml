@@ -172,6 +172,7 @@
                                         </DataTemplate>
                                     </DataGridTemplateColumn.CellTemplate>
                                 </DataGridTemplateColumn>
+                                <DataGridTextColumn Header="앱 Health" Binding="{Binding Health}" Width="150" />
                             </DataGrid.Columns>
                         </DataGrid>
                         <GridSplitter Grid.Row="1" Height="8" HorizontalAlignment="Stretch"
@@ -179,6 +180,9 @@
                         <Border Grid.Row="2" Background="{StaticResource SubtleSurfaceBrush}" Padding="16">
                             <StackPanel>
                                 <TextBlock Text="{Binding SelectionMessage}" TextWrapping="Wrap" Margin="0,0,0,12" />
+                                <TabControl SelectedIndex="{Binding SelectedResourceDetailTabIndex}"
+                                            Style="{StaticResource ResourceTabControlStyle}">
+                                <TabItem Header="개별 제어">
                                 <StackPanel Orientation="Horizontal"
                                             Visibility="{Binding IsControlSelection, Converter={StaticResource BooleanToVisibilityConverter}}">
                                     <Button Content="시작" Command="{Binding StartCommand}" Margin="0,0,8,0"
@@ -188,6 +192,37 @@
                                     <Button Content="재부팅 (EC2)" Command="{Binding RebootCommand}"
                                             Style="{StaticResource SecondaryButtonStyle}" />
                                 </StackPanel>
+                                </TabItem>
+                                <TabItem Header="Health"
+                                         Visibility="{Binding IsEc2Selection, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <StackPanel Margin="0,14,0,0">
+                                    <TextBlock Text="애플리케이션 Health · EC2 상태와 별도" FontWeight="SemiBold" />
+                                    <TextBlock Text="{Binding Health.Message}" Margin="0,4,0,8"
+                                               Foreground="{StaticResource SecondaryTextBrush}" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                        <Button Content="선택 앱 점검" Command="{Binding Health.CheckOneCommand}"
+                                                Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,0" />
+                                        <Button Content="전체 앱 점검" Command="{Binding Health.CheckAllCommand}"
+                                                Style="{StaticResource SecondaryButtonStyle}" />
+                                    </StackPanel>
+                                    <ListBox ItemsSource="{Binding Health.VisibleApps}" SelectedItem="{Binding Health.SelectedApp}"
+                                             MaxHeight="210">
+                                        <ListBox.ItemTemplate><DataTemplate>
+                                            <StackPanel Margin="5">
+                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                                <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap" />
+                                                <TextBlock Text="{Binding Url}" Foreground="{StaticResource SecondaryTextBrush}" />
+                                                <ItemsControl ItemsSource="{Binding History}">
+                                                    <ItemsControl.ItemTemplate><DataTemplate>
+                                                        <TextBlock Text="{Binding DisplayLine}" Margin="10,2,0,0" />
+                                                    </DataTemplate></ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </StackPanel>
+                                        </DataTemplate></ListBox.ItemTemplate>
+                                    </ListBox>
+                                </StackPanel>
+                                </TabItem>
+                                </TabControl>
                             </StackPanel>
                         </Border>
                         </Grid>

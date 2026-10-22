@@ -16,6 +16,7 @@ public sealed class ControlActivityState : INotifyPropertyChanged
     private bool _isGroupControl;
     private volatile bool _cancelRemainingRequested;
     private int _currentStepIndex = -1;
+    private string _historyWarning = "";
 
     public string Message => _message;
     public string Target => _target;
@@ -25,6 +26,15 @@ public sealed class ControlActivityState : INotifyPropertyChanged
     public bool CanCancelRemaining => IsControlRunning && _isGroupControl && _steps.Count > 1 && !_cancelRemainingRequested &&
         _currentStepIndex < _steps.Count - 1;
     public bool CancelRemainingRequested => _cancelRemainingRequested;
+    public string HistoryWarning => _historyWarning;
+    public bool HasHistoryWarning => !string.IsNullOrEmpty(_historyWarning);
+
+    public void ReportHistoryFailure(string message)
+    {
+        _historyWarning = message;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HistoryWarning)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasHistoryWarning)));
+    }
     public string Tone => Message.StartsWith("실패", StringComparison.Ordinal) ||
         Message.StartsWith("시간 초과", StringComparison.Ordinal) ? "error" :
         Message.StartsWith("완료", StringComparison.Ordinal) ? "success" :

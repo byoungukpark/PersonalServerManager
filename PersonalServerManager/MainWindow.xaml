@@ -175,6 +175,9 @@
                                Foreground="{StaticResource PrimaryTextBrush}" />
                     <TextBlock Text="{Binding DisplayMessage}" TextWrapping="Wrap"
                                FontSize="12" Style="{StaticResource GroupStatusTextStyle}" />
+                    <TextBlock Text="{Binding HistoryWarning}" TextWrapping="Wrap"
+                               Foreground="{StaticResource ErrorBrush}" FontSize="12"
+                               Visibility="{Binding HasHistoryWarning, Converter={StaticResource BooleanToVisibilityConverter}}" />
                     <TextBlock Text="남은 작업 취소 요청됨 · 현재 단계의 결과를 확인한 뒤 후속 명령을 중단합니다."
                                FontSize="12" Foreground="{StaticResource SecondaryTextBrush}"
                                Visibility="{Binding CancelRemainingRequested, Converter={StaticResource BooleanToVisibilityConverter}}" />

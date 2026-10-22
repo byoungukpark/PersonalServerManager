@@ -28,6 +28,9 @@
             <DataTemplate DataType="{x:Type viewModels:PlaceholderViewModel}">
                 <views:PlaceholderView />
             </DataTemplate>
+            <DataTemplate DataType="{x:Type viewModels:HistoryViewModel}">
+                <views:HistoryView />
+            </DataTemplate>
             <DataTemplate DataType="{x:Type viewModels:SettingsViewModel}">
                 <views:SettingsView />
             </DataTemplate>

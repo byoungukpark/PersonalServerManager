@@ -40,7 +40,8 @@ public sealed class ServiceGroupService
     /// <summary>기존 ID·계정·리전을 유지하고 새 연결 자원의 계정을 확인한 뒤 로컬 구성만 교체한다.</summary>
     public async Task<ServiceGroup> UpdateAsync(ServiceGroup original, string name,
         IReadOnlyList<GroupResource> resources, IReadOnlyList<GroupResourceRef> startOrder,
-        long? confirmedConnectionVersion, CancellationToken cancellationToken)
+        long? confirmedConnectionVersion, CancellationToken cancellationToken,
+        IReadOnlyList<HealthEndpoint>? healthEndpoints = null)
     {
         if (_controlActivity?.IsControlRunning == true)
             throw new ServiceGroupException("제어 작업 중에는 그룹을 편집할 수 없습니다.");
@@ -62,7 +63,10 @@ public sealed class ServiceGroupService
             Name = GroupRules.NormalizeName(name),
             UpdatedAt = now > original.UpdatedAt ? now : original.UpdatedAt.AddTicks(1),
             Resources = resourceSnapshot,
-            StartOrder = startOrder.ToArray()
+            StartOrder = startOrder.ToArray(),
+            HealthEndpoints = healthEndpoints?.ToArray() ??
+                (original.HealthEndpoints ?? []).Where(endpoint => resourceSnapshot.Any(resource =>
+                    resource.Kind == AwsResourceKind.Ec2 && resource.Id == endpoint.Ec2Id)).ToArray()
         };
         GroupRules.Validate(updated);
         await _store.ReplaceGroupAsync(updated, original.UpdatedAt, cancellationToken);

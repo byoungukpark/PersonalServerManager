@@ -40,10 +40,24 @@ public partial class App : System.Windows.Application
             var groupStatus = new GroupStatusService(connection, resourceQuery);
             var metricQuery = new AwsCloudWatchMetricQuery(connection);
             var controlSettings = await settingsStore.LoadControlSettingsAsync(CancellationToken.None);
-            var settings = new SettingsViewModel(settingsStore, confirmation, controlSettings);
-            var control = new ResourceControlService(connection, groupService, controlActivity, () => settings.Current);
+            var healthTimeout = await settingsStore.LoadHealthTimeoutAsync(CancellationToken.None);
+            var historyRetentionDays = await settingsStore.LoadHistoryRetentionDaysAsync(CancellationToken.None);
+            var historyStore = new ControlHistoryStore();
+            historyStore.AvailabilityChanged += () =>
+            {
+                if (!historyStore.IsAvailable)
+                    controlActivity.ReportHistoryFailure(historyStore.FailureMessage);
+            };
+            try { await historyStore.InitializeAsync(historyRetentionDays, CancellationToken.None); }
+            catch (AppSettingsException exception) { controlActivity.ReportHistoryFailure(exception.Message); }
+            var settings = new SettingsViewModel(settingsStore, confirmation, controlSettings,
+                healthTimeout, historyRetentionDays);
+            var health = new HealthCheckService();
+            var control = new ResourceControlService(connection, groupService, controlActivity,
+                () => settings.Current, history: historyStore);
             var dashboard = new DashboardViewModel(navigation, groupService, groupStatus);
-            var groupDetail = new GroupDetailViewModel(navigation, groupService, groupStatus, confirmation, control, metricQuery);
+            var groupDetail = new GroupDetailViewModel(navigation, groupService, groupStatus, confirmation,
+                control, metricQuery, health, () => settings.CurrentHealthTimeoutSeconds);
             dashboard.GroupStatusRead += groupDetail.ApplySharedStatus;
             dashboard.GroupStatusRefreshChanged += groupDetail.SetSharedStatusRefreshing;
             var groupManagement = new GroupManagementViewModel(groupService, connection, resourceQuery,
@@ -93,8 +107,8 @@ public partial class App : System.Windows.Application
                 _ = groupDetail.LoadAsync(id);
             };
             navigation.Register(AppPage.GroupWorkspace, wizard);
-            navigation.Register(AppPage.History, new PlaceholderViewModel(
-                "작업 기록", "제어 작업 기록 조회 기능은 이후 단계에서 제공됩니다."));
+            var historyViewModel = new HistoryViewModel(historyStore);
+            navigation.Register(AppPage.History, historyViewModel);
             navigation.Register(AppPage.Settings, settings);
             await dashboard.LoadAsync();
             navigation.NavigateTo(AppPage.Dashboard);
@@ -104,6 +118,22 @@ public partial class App : System.Windows.Application
             statusTimer.Tick += async (_, _) => await dashboard.RefreshStatusesAsync();
             var metricTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(5) };
             metricTimer.Tick += async (_, _) => await groupDetail.RefreshMetricsIfDueAsync();
+            var healthTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+            var healthRefreshRunning = false;
+            healthTimer.Tick += async (_, _) =>
+            {
+                if (healthRefreshRunning) return;
+                healthRefreshRunning = true;
+                try
+                {
+                    var groups = await groupService.ListAsync(CancellationToken.None);
+                    var endpoints = groups.SelectMany(group => group.HealthEndpoints ?? []).ToArray();
+                    await Task.WhenAll(endpoints.Select(endpoint =>
+                        health.CheckAsync(endpoint, settings.CurrentHealthTimeoutSeconds)));
+                }
+                catch (Exception) { /* 점검 오류는 각 앱 결과로 표시하고 다음 주기에 다시 시도한다. */ }
+                finally { healthRefreshRunning = false; }
+            };
             connection.PropertyChanged += async (_, args) =>
             {
                 if (args.PropertyName != nameof(AwsConnectionService.ActiveConnection) &&
@@ -119,9 +149,11 @@ public partial class App : System.Windows.Application
             };
             navigation.PropertyChanged += async (_, args) =>
             {
-                if (args.PropertyName == nameof(NavigationService.CurrentPage) &&
-                    navigation.CurrentPage == AppPage.Dashboard)
+                if (args.PropertyName != nameof(NavigationService.CurrentPage)) return;
+                if (navigation.CurrentPage == AppPage.Dashboard)
                     await dashboard.RefreshStatusesAsync();
+                if (navigation.CurrentPage == AppPage.History)
+                    await historyViewModel.SearchAsync();
             };
 
             var window = new MainWindow
@@ -134,6 +166,8 @@ public partial class App : System.Windows.Application
             {
                 statusTimer.Stop();
                 metricTimer.Stop();
+                healthTimer.Stop();
+                health.Dispose();
                 groupDetail.CancelMetricRefresh();
             };
             var closeAfterProfileSave = false;
@@ -193,6 +227,7 @@ public partial class App : System.Windows.Application
             window.Show();
             statusTimer.Start();
             metricTimer.Start();
+            healthTimer.Start();
         }
         catch (AppSettingsException exception)
         {

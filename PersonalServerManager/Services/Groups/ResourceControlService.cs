@@ -1,5 +1,6 @@
 using PersonalServerManager.Models;
 using PersonalServerManager.Services.Aws;
+using PersonalServerManager.Services.Persistence;
 
 namespace PersonalServerManager.Services.Groups;
 
@@ -14,7 +15,7 @@ public sealed record ControlTimeoutSettings(int Ec2Minutes = 10, int RdsMinutes 
 }
 
 /// <summary>등록 자원의 개별·그룹 제어와 앱 전체 단일 실행을 담당한다. 화면 이동과 무관하게 실행한다.</summary>
-public sealed class ResourceControlService
+public sealed partial class ResourceControlService
 {
     private sealed record StepResult(string Status, string Message)
     {
@@ -26,21 +27,29 @@ public sealed class ResourceControlService
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Func<ControlTimeoutSettings> _settings;
     private readonly TimeProvider _clock;
+    private readonly IControlHistoryStore? _history;
 
     public ResourceControlService(AwsConnectionService connection, ServiceGroupService groups,
-        ControlActivityState activity, Func<ControlTimeoutSettings> settings, TimeProvider? clock = null)
+        ControlActivityState activity, Func<ControlTimeoutSettings> settings, TimeProvider? clock = null,
+        IControlHistoryStore? history = null)
     {
         _connection = connection;
         _groups = groups;
         Activity = activity;
         _settings = settings;
         _clock = clock ?? TimeProvider.System;
+        _history = history;
+        if (_history is not null)
+            _history.AvailabilityChanged += () => ControlAvailabilityChanged?.Invoke();
     }
+
+    public event Action? ControlAvailabilityChanged;
 
     public ControlActivityState Activity { get; }
     public long? ConnectionVersion => _connection.ActiveConnection?.ConnectionVersion;
     public bool CanControl(ServiceGroup? group) => group is not null && _connection.IsConnected &&
-        _connection.ActiveConnection?.AccountId == group.AccountId && !Activity.IsControlRunning;
+        _connection.ActiveConnection?.AccountId == group.AccountId && !Activity.IsControlRunning &&
+        _history?.IsAvailable != false;
 
     public static string ActionLabel(ResourceControlAction action) => action switch
     {
@@ -89,6 +98,8 @@ public sealed class ResourceControlService
     {
         if (!await _gate.WaitAsync(0)) throw new ServiceGroupException("다른 제어 작업이 진행 중입니다.");
         var target = $"{kind} {resourceId} · {ActionLabel(action)}";
+        ControlJournal? journal = null;
+        var finalStatus = "실패";
         try
         {
             Activity.IsControlRunning = true;
@@ -108,7 +119,9 @@ public sealed class ResourceControlService
                 ?? throw new ServiceGroupException("현재 연결은 자원 제어를 지원하지 않습니다.");
             var settings = _settings();
             settings.Validate();
-            await RunStepAsync(session, group, resource, action, confirmedVersion, settings, target);
+            journal = await BeginJournalAsync(group, action, [resource]);
+            var result = await RunStepAsync(session, group, resource, action, confirmedVersion, settings, target, 0, journal);
+            finalStatus = result.Status;
         }
         catch (Exception exception)
         {
@@ -116,6 +129,7 @@ public sealed class ResourceControlService
         }
         finally
         {
+            if (journal is not null) await journal.FinishAsync(finalStatus, Activity.Message);
             Activity.RememberResult();
             Activity.IsControlRunning = false;
             _gate.Release();
@@ -129,6 +143,8 @@ public sealed class ResourceControlService
         if (!await _gate.WaitAsync(0)) throw new ServiceGroupException("다른 제어 작업이 진행 중입니다.");
         var target = $"그룹 · {ActionLabel(action)}";
         var completedSteps = 0;
+        ControlJournal? journal = null;
+        var finalStatus = "실패";
         try
         {
             Activity.IsControlRunning = true;
@@ -151,6 +167,7 @@ public sealed class ResourceControlService
                 ?? throw new ServiceGroupException("현재 연결은 자원 제어를 지원하지 않습니다.");
             var settings = _settings();
             settings.Validate();
+            journal = await BeginJournalAsync(group, action, resources, isGroup: true);
             Activity.BeginGroup(resources.Select((resource, index) =>
                 new ControlStepState(index + 1, $"{resource.Kind} {resource.Name} ({resource.Id})", "대기", "명령 전"))
                 .ToArray());
@@ -160,8 +177,16 @@ public sealed class ResourceControlService
                 // 확인된 취소는 현재 AWS 단계의 결과를 기다린 뒤 다음 명령 제출 전에 반영한다.
                 if (Activity.CancelRemainingRequested)
                 {
-                    MarkRemaining(index, "사용자 취소", "명령을 보내지 않았습니다.");
+                    await MarkRemainingAsync(index, "사용자 취소", "명령을 보내지 않았습니다.", journal);
                     Activity.Report(target, $"사용자 취소 · {completedSteps}/{resources.Length}단계 완료. 남은 명령은 보내지 않았습니다.");
+                    finalStatus = "사용자 취소";
+                    return;
+                }
+
+                if (_history?.IsAvailable == false)
+                {
+                    await MarkRemainingAsync(index, "미실행", "작업 기록 오류로 명령을 보내지 않았습니다.", journal);
+                    Activity.Report(target, "실패 · 작업 기록 오류로 후속 명령을 보내지 않았습니다.");
                     return;
                 }
 
@@ -171,7 +196,8 @@ public sealed class ResourceControlService
                 StepResult result;
                 try
                 {
-                    result = await RunStepAsync(session, group, resource, action, confirmedVersion, settings, stepTarget, index);
+                    result = await RunStepAsync(session, group, resource, action, confirmedVersion, settings,
+                        stepTarget, index, journal);
                 }
                 catch (Exception exception)
                 {
@@ -181,14 +207,16 @@ public sealed class ResourceControlService
                 Activity.UpdateStep(index, result.Status, result.Message);
                 if (!result.CanContinue)
                 {
-                    MarkRemaining(index + 1, "미실행", "이전 단계가 완료되지 않아 명령을 보내지 않았습니다.");
+                    await MarkRemainingAsync(index + 1, "미실행", "이전 단계가 완료되지 않아 명령을 보내지 않았습니다.", journal);
                     Activity.Report(target, $"{result.Status} · {index + 1}단계에서 중단. {completedSteps}/{resources.Length}단계 완료. 자동 복구하지 않습니다.");
+                    finalStatus = result.Status;
                     return;
                 }
                 completedSteps++;
             }
 
             Activity.Report(target, $"완료 · {completedSteps}/{resources.Length}단계 목표 상태 확인 또는 건너뜀");
+            finalStatus = "완료";
         }
         catch (Exception exception)
         {
@@ -196,6 +224,7 @@ public sealed class ResourceControlService
         }
         finally
         {
+            if (journal is not null) await journal.FinishAsync(finalStatus, Activity.Message);
             Activity.EndGroup();
             Activity.RememberResult();
             Activity.IsControlRunning = false;
@@ -203,16 +232,19 @@ public sealed class ResourceControlService
         }
     }
 
-    private void MarkRemaining(int fromIndex, string status, string message)
+    private async Task MarkRemainingAsync(int fromIndex, string status, string message, ControlJournal? journal)
     {
         for (var index = fromIndex; index < Activity.Steps.Count; index++)
+        {
             Activity.UpdateStep(index, status, message);
+            if (journal is not null) await journal.StepAsync(index, status, message, complete: true);
+        }
     }
 
     /// <summary>개별·그룹 제어가 같은 AWS 상태 검증, 명령 전송, 목표 상태 확인을 사용한다.</summary>
     private async Task<StepResult> RunStepAsync(IAwsResourceControlSession session, ServiceGroup group,
         GroupResource resource, ResourceControlAction action, long confirmedVersion,
-        ControlTimeoutSettings settings, string target, int? stepIndex = null)
+        ControlTimeoutSettings settings, string target, int? stepIndex = null, ControlJournal? journal = null)
     {
         var kind = resource.Kind;
         var timeout = TimeSpan.FromMinutes(kind == AwsResourceKind.Ec2 ? settings.Ec2Minutes : settings.RdsMinutes);
@@ -222,12 +254,18 @@ public sealed class ResourceControlService
         var sent = false;
         try
         {
+            if (journal is not null && stepIndex is { } position)
+                await journal.StepAsync(position, "진행 중", "상태 확인 중", beforeCommand: true);
             // 제어 API 호출 전에 실제 AWS 상태와 제어 가능 여부를 다시 읽는다.
             var current = await session.ReadControlStateAsync(group.Region, kind, resource.Id, token);
             token.ThrowIfCancellationRequested();
             if (current.BlockReason is not null) throw new ServiceGroupException(current.BlockReason);
             if (action != ResourceControlAction.Reboot && current.State == goal)
+            {
+                if (journal is not null && stepIndex is { } skipped)
+                    await journal.StepAsync(skipped, "건너뜀", $"이미 {goal} 상태", confirmed: true, complete: true);
                 return ReportResult(target, "건너뜀", $"완료 · 이미 {goal} 상태여서 명령을 보내지 않았습니다.");
+            }
             if (action != ResourceControlAction.Reboot && current.StartStopBlockReason is not null)
                 throw new ServiceGroupException(current.StartStopBlockReason);
 
@@ -237,14 +275,22 @@ public sealed class ResourceControlService
 
             EnsureConnection(group, confirmedVersion);
             token.ThrowIfCancellationRequested();
+            if (journal is not null && stepIndex is { } sending)
+                await journal.StepAsync(sending, "명령 전송", "AWS 명령 전송 직전", beforeCommand: true);
             ReportProgress(target, "명령 전송", "명령 전송 중 · 응답 대기", stepIndex);
             sent = true;
             // AWS 명령은 한 번만 제출한다. 응답 오류 후 자동 재전송하면 중복 제어가 될 수 있다.
             await session.SendControlAsync(group.Region, kind, resource.Id, action, token);
             token.ThrowIfCancellationRequested();
             ReportProgress(target, "AWS 요청 접수", "AWS 요청 접수", stepIndex);
+            if (journal is not null && stepIndex is { } accepted)
+                await journal.StepAsync(accepted, "AWS 요청 접수", "AWS 요청 접수", accepted: true);
             if (action == ResourceControlAction.Reboot)
-                return ReportResult(target, "완료", "요청 접수 · 재부팅 완료 미확인");
+            {
+                if (journal is not null && stepIndex is { } reboot)
+                    await journal.StepAsync(reboot, "요청 접수", "재부팅 요청 접수 · 완료 미확인", complete: true);
+                return ReportResult(target, "요청 접수", "요청 접수 · 재부팅 완료 미확인");
+            }
 
             var interval = TimeSpan.FromSeconds(kind == AwsResourceKind.Ec2 ? 5 : 15);
             while (true)
@@ -256,7 +302,11 @@ public sealed class ResourceControlService
                 current = await session.ReadControlStateAsync(group.Region, kind, resource.Id, token);
                 token.ThrowIfCancellationRequested();
                 if (current.State == goal)
+                {
+                    if (journal is not null && stepIndex is { } completed)
+                        await journal.StepAsync(completed, "완료", $"{goal} 확인", confirmed: true, complete: true);
                     return ReportResult(target, "완료", $"완료 · {goal} 확인");
+                }
                 if (current.BlockReason is not null || current.State is "terminated" or "shutting-down" or "failed" or "incompatible-restore")
                     throw new ServiceGroupException(current.BlockReason ?? $"목표 상태에 도달할 수 없습니다 ({current.State}).");
                 ReportProgress(target, "목표 상태 대기", $"목표 상태 대기 · 현재 {current.State}", stepIndex);
@@ -266,6 +316,8 @@ public sealed class ResourceControlService
         {
             Activity.Report(target, "시간 초과 · 목표 상태를 확인하지 못했습니다. 이미 전송한 요청은 취소되지 않습니다.");
             await ReadFinalStateAsync(session, group, kind, resource.Id, confirmedVersion);
+            if (journal is not null && stepIndex is { } timedOut)
+                await journal.StepAsync(timedOut, "시간 초과", Activity.Message, complete: true);
             return new StepResult("시간 초과", Activity.Message);
         }
         catch (Exception exception)
@@ -276,6 +328,8 @@ public sealed class ResourceControlService
             Activity.Report(target, $"실패 · {FriendlyError(exception)}" +
                 (sent ? " 이미 전송한 요청이 진행 중일 수 있으므로 실제 상태를 다시 확인하세요." : ""));
             if (sent) await ReadFinalStateAsync(session, group, kind, resource.Id, confirmedVersion);
+            if (journal is not null && stepIndex is { } failed)
+                await journal.StepAsync(failed, "실패", Activity.Message, complete: true);
             return new StepResult("실패", Activity.Message);
         }
     }
@@ -289,7 +343,8 @@ public sealed class ResourceControlService
     private void ReportProgress(string target, string status, string message, int? stepIndex)
     {
         Activity.Report(target, message);
-        if (stepIndex is { } index) Activity.UpdateStep(index, status, message);
+        if (stepIndex is { } index && index < Activity.Steps.Count)
+            Activity.UpdateStep(index, status, message);
     }
 
     private void EnsureConnection(ServiceGroup group, long version)

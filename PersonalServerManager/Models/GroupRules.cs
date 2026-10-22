@@ -98,6 +98,21 @@ public static class GroupRules
         {
             throw new ServiceGroupException("모든 EC2/RDS 리소스의 시작 순서를 지정해야 합니다.");
         }
+
+        var healthIds = new HashSet<Guid>();
+        foreach (var endpoint in group.HealthEndpoints ?? [])
+        {
+            if (endpoint is null || endpoint.Id == Guid.Empty || !healthIds.Add(endpoint.Id) ||
+                string.IsNullOrWhiteSpace(endpoint.Ec2Id) ||
+                !group.Resources.Any(resource => resource.Kind == AwsResourceKind.Ec2 &&
+                    string.Equals(resource.Id, endpoint.Ec2Id, StringComparison.OrdinalIgnoreCase)) ||
+                string.IsNullOrWhiteSpace(endpoint.Name) || endpoint.Name != endpoint.Name.Trim() ||
+                endpoint.Name.Length > 80 || !Enum.IsDefined(endpoint.Rule) ||
+                !Uri.TryCreate(endpoint.Url, UriKind.Absolute, out var uri) ||
+                uri.Scheme is not ("http" or "https") || !string.IsNullOrEmpty(uri.UserInfo) ||
+                !string.IsNullOrEmpty(uri.Fragment))
+                throw new ServiceGroupException("Health 설정은 등록된 EC2, 앱 이름, 인증 없는 HTTP/HTTPS URL을 사용해야 합니다.");
+        }
     }
 
     public static void EnsureUnique(ServiceGroup candidate, IEnumerable<ServiceGroup> existingGroups)

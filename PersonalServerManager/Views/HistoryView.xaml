@@ -1,0 +1,81 @@
+<UserControl x:Class="PersonalServerManager.Views.HistoryView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Foreground="{StaticResource PrimaryTextBrush}">
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Styles/ResourceDiscovery.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </UserControl.Resources>
+    <Grid Margin="36,30,36,26">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="18" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <StackPanel>
+            <TextBlock Text="제어 작업 기록" FontSize="27" FontWeight="SemiBold" />
+            <TextBlock Text="로컬에 저장된 작업과 자원별 실행 단계를 확인합니다. 실제 AWS 상태는 별도로 다시 조회하세요."
+                       Margin="0,7,0,18" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" />
+        </StackPanel>
+        <StackPanel Grid.Row="1" Margin="0,0,0,16">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom">
+                <StackPanel Margin="0,0,10,0">
+                    <TextBlock Text="검색" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,6" />
+                    <TextBox Text="{Binding Keyword, UpdateSourceTrigger=PropertyChanged}" Width="300"
+                             Style="{StaticResource WizardTextBoxStyle}"
+                             ToolTip="그룹 이름, 자원 ID 또는 메시지 검색" />
+                </StackPanel>
+                <StackPanel Margin="0,0,10,0">
+                    <TextBlock Text="작업 상태" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,6" />
+                    <ComboBox ItemsSource="{Binding StatusChoices}" DisplayMemberPath="Label"
+                              SelectedValuePath="Value" SelectedValue="{Binding Status}" Width="160"
+                              Style="{StaticResource AppComboBoxStyle}" />
+                </StackPanel>
+                <Button Content="검색 · 새로고침" Command="{Binding SearchCommand}"
+                        Style="{StaticResource SecondaryButtonStyle}" VerticalAlignment="Bottom" />
+            </StackPanel>
+            <TextBlock Text="{Binding Message}" Margin="0,10,0,0" TextWrapping="Wrap"
+                       Foreground="{StaticResource SecondaryTextBrush}" />
+        </StackPanel>
+        <DataGrid Grid.Row="2" ItemsSource="{Binding Jobs}" SelectedItem="{Binding SelectedJob, Mode=TwoWay}"
+                  Style="{StaticResource ResourceDataGridStyle}" AutoGenerateColumns="False"
+                  IsReadOnly="True" CanUserAddRows="False">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="시작" Binding="{Binding StartedLocal, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}" Width="190" />
+                <DataGridTextColumn Header="그룹" Binding="{Binding GroupName}" Width="*" />
+                <DataGridTextColumn Header="명령" Binding="{Binding Action}" Width="120" />
+                <DataGridTextColumn Header="결과" Binding="{Binding Status}" Width="120" />
+                <DataGridTextColumn Header="설명" Binding="{Binding Message}" Width="2*" />
+            </DataGrid.Columns>
+        </DataGrid>
+        <Border Grid.Row="4" Style="{StaticResource SurfaceCardStyle}" Padding="16">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+                    <TextBlock Text="자원별 실행 단계" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text="AWS 요청 접수와 목표 상태 확인을 구분합니다. 앱 종료로 확인이 중단된 단계는 완료 미확인입니다."
+                               Margin="0,5,0,0" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" />
+                </StackPanel>
+                <DataGrid ItemsSource="{Binding Steps}" Style="{StaticResource ResourceDataGridStyle}"
+                          AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="순서" Binding="{Binding Position}" Width="65" />
+                        <DataGridTextColumn Header="자원" Binding="{Binding Kind}" Width="80" />
+                        <DataGridTextColumn Header="ID" Binding="{Binding ResourceId}" Width="170" />
+                        <DataGridTextColumn Header="명령" Binding="{Binding Action}" Width="90" />
+                        <DataGridTextColumn Header="시작 시각" Binding="{Binding StartedLocal, StringFormat={}{0:MM-dd HH:mm:ss}}" Width="130" />
+                        <DataGridTextColumn Header="완료 시각" Binding="{Binding CompletedLocal, StringFormat={}{0:MM-dd HH:mm:ss}}" Width="130" />
+                        <DataGridCheckBoxColumn Header="접수" Binding="{Binding RequestAccepted}" Width="65" />
+                        <DataGridCheckBoxColumn Header="목표 확인" Binding="{Binding GoalConfirmed}" Width="90" />
+                        <DataGridTextColumn Header="결과" Binding="{Binding Status}" Width="110" />
+                        <DataGridTextColumn Header="설명" Binding="{Binding Message}" Width="*" />
+                    </DataGrid.Columns>
+                </DataGrid>
+            </DockPanel>
+        </Border>
+    </Grid>
+</UserControl>

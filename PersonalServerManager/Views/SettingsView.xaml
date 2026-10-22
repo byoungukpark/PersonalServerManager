@@ -10,7 +10,7 @@
   </ResourceDictionary>
  </UserControl.Resources>
  <StackPanel Margin="36,32" MaxWidth="700" HorizontalAlignment="Left">
-  <TextBlock Text="AWS 제어 제한시간" FontSize="24" FontWeight="SemiBold" />
+  <TextBlock Text="작업 제한시간" FontSize="24" FontWeight="SemiBold" />
   <TextBlock Text="제한시간이 지나도 이미 전송한 AWS 명령은 취소되지 않습니다."
              Margin="0,12,0,24" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" />
   <TextBlock Text="EC2 (1~60분 · 기본 10분)" />
@@ -19,6 +19,21 @@
   <TextBlock Text="RDS (1~120분 · 기본 30분)" />
   <TextBox Text="{Binding RdsMinutes, UpdateSourceTrigger=PropertyChanged}" Margin="0,8,0,24"
            Style="{StaticResource WizardTextBoxStyle}" />
+  <TextBlock Text="애플리케이션 Health HTTP 제한시간" />
+  <ComboBox ItemsSource="{Binding HealthTimeoutChoices}" SelectedItem="{Binding HealthTimeoutSeconds}"
+            Margin="0,8,0,24" HorizontalAlignment="Left" MinWidth="150"
+            Style="{StaticResource AppComboBoxStyle}">
+   <ComboBox.ItemTemplate>
+    <DataTemplate>
+     <TextBlock Text="{Binding StringFormat={}{0}초}" />
+    </DataTemplate>
+   </ComboBox.ItemTemplate>
+  </ComboBox>
+  <TextBlock Text="제어 작업 기록 보존 기간" />
+  <ComboBox ItemsSource="{Binding HistoryRetentionChoices}" DisplayMemberPath="Label"
+            SelectedValuePath="Days" SelectedValue="{Binding HistoryRetentionDays}"
+            Margin="0,8,0,24" HorizontalAlignment="Left" MinWidth="180"
+            Style="{StaticResource AppComboBoxStyle}" />
   <Button Content="변경사항 저장" Command="{Binding SaveCommand}" HorizontalAlignment="Left"
           Style="{StaticResource PrimaryButtonStyle}" />
   <TextBlock Text="{Binding Message}" TextWrapping="Wrap" Margin="0,20,0,0" />

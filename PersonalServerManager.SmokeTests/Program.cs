@@ -1,4 +1,6 @@
 using PersonalServerManager.Services.Aws;
+using System.Net.Http;
+using System.IO;
 using PersonalServerManager.Services.Persistence;
 using PersonalServerManager.Models;
 using PersonalServerManager.Services.Groups;
@@ -32,7 +34,128 @@ var checks = new List<(string Name, Func<Task> Run)>
     ("그룹 그래프 화면 이탈·재진입", MetricReentryViewAsync),
     ("CloudWatch 그룹 카드·범위·오류·취소", MetricMonitoringAsync),
     ("30초 상태 결과 상세 화면 공유", SharedStatusAsync)
+    ,("Health HTTP 판정·중복 요청·최근 10회", HealthCheckAsync)
+    ,("Health 설정 JSON 저장·복원·유효성", HealthPersistenceAsync)
+    ,("SQLite 작업·단계 기록·검색·복원·보존", ControlHistoryAsync)
+    ,("작업 기록 오류 시 새 AWS 제어 차단", HistoryFailClosedAsync)
 };
+
+static async Task ControlHistoryAsync()
+{
+    var directory = Path.Combine(Directory.GetCurrentDirectory(), ".smoke-temp");
+    Directory.CreateDirectory(directory);
+    var path = Path.Combine(directory, $"history-{Guid.NewGuid():N}.db");
+    try
+    {
+        var store = new ControlHistoryStore(path);
+        await store.InitializeAsync(30, default);
+        var now = DateTimeOffset.UtcNow;
+        var id = Guid.NewGuid();
+        var job = new ControlJobRecord(id, Guid.NewGuid(), "테스트 그룹", "111111111111",
+            "ap-northeast-2", "그룹 시작", now, null, "진행 중", "제어 시작");
+        var steps = new[]
+        {
+            new ControlStepRecord(id, 1, "Ec2", "i-1", "시작", null, null, false, false, "대기", "명령 전"),
+            new ControlStepRecord(id, 2, "Rds", "db-1", "시작", null, null, false, false, "대기", "명령 전")
+        };
+        await store.StartAsync(job, steps, default);
+        await store.UpdateStepAsync(steps[0] with
+        { StartedAt = now, CompletedAt = now.AddSeconds(2), RequestAccepted = true,
+          GoalConfirmed = true, Status = "완료", Message = "running 확인" }, default);
+        await store.UpdateStepAsync(steps[1] with
+        { Status = "미실행", Message = "이전 단계 중단", CompletedAt = now.AddSeconds(2) }, default);
+        await store.FinishAsync(job with
+        { CompletedAt = now.AddSeconds(2), Status = "실패", Message = "2단계 미실행" }, default);
+        var found = await store.SearchAsync("i-1", "실패", default);
+        var recorded = await store.StepsAsync(id, default);
+        Check(found.Count == 1 && recorded.Count == 2 && recorded[0].RequestAccepted &&
+            recorded[0].GoalConfirmed && recorded[1].Status == "미실행", "작업/단계 검색 또는 판정 기록 오류");
+        var interruptedId = Guid.NewGuid();
+        await store.StartAsync(job with { Id = interruptedId, StartedAt = now.AddSeconds(3) },
+            [steps[0] with { JobId = interruptedId, Status = "대기" }], default);
+        var reopened = new ControlHistoryStore(path);
+        await reopened.InitializeAsync(30, default);
+        Check((await reopened.SearchAsync("", "완료 미확인", default)).Any(item => item.Id == interruptedId) &&
+            (await reopened.StepsAsync(interruptedId, default))[0].Status == "미실행", "재시작 시 중단 작업 판정 오류");
+        var oldId = Guid.NewGuid();
+        var old = job with { Id = oldId, StartedAt = now.AddDays(-40), CompletedAt = now.AddDays(-39), Status = "완료" };
+        await reopened.StartAsync(old, [], default);
+        await reopened.InitializeAsync(30, default);
+        Check(!(await reopened.SearchAsync("", "", default)).Any(item => item.Id == oldId), "30일 보존 정리 오류");
+    }
+    finally
+    {
+        if (File.Exists(path)) File.Delete(path);
+    }
+}
+
+static async Task HistoryFailClosedAsync()
+{
+    var fixture = await ControlFixtureAsync();
+    var history = new FailingHistoryStore();
+    var guarded = new ResourceControlService(fixture.Connection, fixture.Groups, fixture.Activity,
+        () => new ControlTimeoutSettings(), fixture.Clock, history);
+    fixture.Session.ControlState = (_, _, _, _) => Task.FromResult(new ResourceControlSnapshot("stopped"));
+    await guarded.ExecuteAsync(fixture.Group.Id, AwsResourceKind.Ec2, "i-1", ResourceControlAction.Start,
+        fixture.Version);
+    Check(fixture.Session.Sent == 0 && fixture.Activity.Message.Contains("기록") &&
+        fixture.Activity.HasHistoryWarning && !guarded.CanControl(fixture.Group),
+        "기록 실패 후 AWS 명령 또는 재제어가 허용됨");
+}
+
+static async Task HealthCheckAsync()
+{
+    var endpoint = new HealthEndpoint(Guid.NewGuid(), "i-1", "앱", "https://example.test/health", HealthCheckRule.StatusUp);
+    var code = 200;
+    var body = "{\"status\":\"UP\"}";
+    var calls = 0;
+    using var client = new HttpClient(new DelegateHttpHandler((_, _) =>
+    {
+        Interlocked.Increment(ref calls);
+        return Task.FromResult(new HttpResponseMessage((System.Net.HttpStatusCode)code)
+        { Content = new StringContent(body) });
+    }));
+    using var service = new HealthCheckService(client);
+    var first = await Task.WhenAll(service.CheckAsync(endpoint, 5), service.CheckAsync(endpoint, 5));
+    Check(first.All(item => item.State == HealthCheckState.Healthy) && calls == 1, "동시 점검 중복 제거/UP 판정 오류");
+    body = "{\"status\":\"DOWN\"}";
+    Check((await service.CheckAsync(endpoint, 5)).State == HealthCheckState.Unhealthy, "본문 불일치 판정 오류");
+    code = 503;
+    Check((await service.CheckAsync(endpoint, 5)).State == HealthCheckState.Unhealthy, "HTTP 오류 판정 오류");
+    code = 200;
+    for (var i = 0; i < 10; i++) await service.CheckAsync(endpoint, 5);
+    Check(service.History(endpoint.Id).Count == 10, "최근 10회 제한 오류");
+    using var failed = new HealthCheckService(new HttpClient(new DelegateHttpHandler((_, _) =>
+        throw new HttpRequestException("연결 없음"))));
+    Check((await failed.CheckAsync(endpoint, 5)).State == HealthCheckState.ConnectionFailed, "연결 실패 판정 오류");
+}
+
+static async Task HealthPersistenceAsync()
+{
+    var path = Path.Combine(Path.GetTempPath(), $"health-{Guid.NewGuid():N}.json");
+    try
+    {
+        var store = new JsonAppSettingsStore(path);
+        var now = DateTimeOffset.UtcNow;
+        var endpoint = new HealthEndpoint(Guid.NewGuid(), "i-1", "UKart", "https://example.test/actuator/health", HealthCheckRule.StatusUp);
+        var group = new ServiceGroup(Guid.NewGuid(), "Health", "111111111111", "ap-northeast-2", "first", now, now,
+            [new GroupResource(AwsResourceKind.Ec2, "i-1", "server", "ap-northeast-2")],
+            [new GroupResourceRef(AwsResourceKind.Ec2, "i-1")], [endpoint]);
+        await store.AddGroupAsync(group, default);
+        await store.SaveTimeoutSettingsAsync(new ControlTimeoutSettings(11, 31), 10, default);
+        var restored = (await store.LoadGroupsAsync(default)).Single();
+        Check(restored.HealthEndpoints?.Single() == endpoint && await store.LoadHealthTimeoutAsync(default) == 10 &&
+            (await store.LoadControlSettingsAsync(default)).Ec2Minutes == 11,
+            "Health JSON 복원 오류");
+        try
+        {
+            GroupRules.Validate(group with { HealthEndpoints = [endpoint with { Url = "file:///secret" }] });
+            throw new Exception("비 HTTP URL 허용");
+        }
+        catch (ServiceGroupException) { }
+    }
+    finally { if (File.Exists(path)) File.Delete(path); }
+}
 
 foreach (var (name, run) in checks.Where(check => args.Length == 0 || check.Name.Contains(args[0], StringComparison.OrdinalIgnoreCase)))
 {
@@ -915,10 +1038,13 @@ static Task WpfViewsAsync()
             management.LoadAsync(group.Id).GetAwaiter().GetResult();
             detail.SelectedResource = detail.Resources.First(row => row.Kind == "EC2");
             detail.SelectedContentTabIndex = 1;
-            var settings = new SettingsViewModel(new JsonAppSettingsStore(), new FakeConfirmation(), new ControlTimeoutSettings());
+            var settingsStore = new JsonAppSettingsStore();
+            var settings = new SettingsViewModel(settingsStore, new FakeConfirmation(),
+                new ControlTimeoutSettings(), 5);
             foreach (var view in new System.Windows.Controls.UserControl[]
                      { new DashboardView(), new GroupDetailView { DataContext = detail },
-                       new GroupManagementView { DataContext = management }, new SettingsView { DataContext = settings } })
+                       new GroupManagementView { DataContext = management }, new SettingsView { DataContext = settings },
+                       new HistoryView { DataContext = new HistoryViewModel(new FailingHistoryStore()) } })
             {
                 if (view is GroupManagementView)
                 {
@@ -929,14 +1055,15 @@ static Task WpfViewsAsync()
                     tabs.SelectedIndex = 1;
                 }
                 var width = view is GroupManagementView ? 1100 : 1280;
-                var height = view is GroupManagementView ? 560 : view is GroupDetailView ? 1800 : 1100;
+                var height = view is GroupManagementView ? 560 : view is GroupDetailView ? 1800 :
+                    view is HistoryView ? 900 : 1100;
                 view.Measure(new System.Windows.Size(width, height));
                 view.Arrange(new System.Windows.Rect(0, 0, width, height));
                 view.UpdateLayout();
                 view.Measure(new System.Windows.Size(width, height));
                 view.Arrange(new System.Windows.Rect(0, 0, width, height));
                 view.UpdateLayout();
-                if (view is GroupDetailView or GroupManagementView or SettingsView)
+                if (view is GroupDetailView or GroupManagementView or SettingsView or HistoryView)
                 {
                     var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(width, height, 96, 96,
                         System.Windows.Media.PixelFormats.Pbgra32);
@@ -1186,4 +1313,31 @@ sealed class FakeConfirmation : IConfirmationService
     public bool Result { get; set; } = true;
     public Task<bool> ConfirmAsync(string title, string message, string confirmButtonText,
         CancellationToken cancellationToken = default) => Task.FromResult(Result);
+}
+
+sealed class FailingHistoryStore : IControlHistoryStore
+{
+    public bool IsAvailable { get; private set; } = true;
+    public string FailureMessage { get; private set; } = "작업 기록 저장 실패";
+    public event Action? AvailabilityChanged;
+    public Task InitializeAsync(int retentionDays, CancellationToken token) => Task.CompletedTask;
+    public Task StartAsync(ControlJobRecord job, IReadOnlyList<ControlStepRecord> steps, CancellationToken token)
+    {
+        IsAvailable = false;
+        AvailabilityChanged?.Invoke();
+        throw new AppSettingsException(FailureMessage);
+    }
+    public Task UpdateStepAsync(ControlStepRecord step, CancellationToken token) => Task.CompletedTask;
+    public Task FinishAsync(ControlJobRecord job, CancellationToken token) => Task.CompletedTask;
+    public Task<IReadOnlyList<ControlJobRecord>> SearchAsync(string keyword, string status, CancellationToken token) =>
+        Task.FromResult<IReadOnlyList<ControlJobRecord>>([]);
+    public Task<IReadOnlyList<ControlStepRecord>> StepsAsync(Guid jobId, CancellationToken token) =>
+        Task.FromResult<IReadOnlyList<ControlStepRecord>>([]);
+}
+
+sealed class DelegateHttpHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send)
+    : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token) =>
+        send(request, token);
 }

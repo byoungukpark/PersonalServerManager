@@ -8,7 +8,8 @@ using PersonalServerManager.Models;
 namespace PersonalServerManager.Services.Persistence;
 
 /// <summary>프로필 선택과 서비스 그룹을 하나의 사용자별 JSON 파일에 안전하게 저장한다.</summary>
-public sealed class JsonAppSettingsStore : ISelectedProfileStore, IServiceGroupStore, IControlSettingsStore
+public sealed class JsonAppSettingsStore : ISelectedProfileStore, IServiceGroupStore, IControlSettingsStore,
+    IHealthSettingsStore, IHistoryRetentionStore
 {
     private const int CurrentSchemaVersion = 1;
     private static readonly SemaphoreSlim FileGate = new(1, 1);
@@ -274,6 +275,106 @@ public sealed class JsonAppSettingsStore : ISelectedProfileStore, IServiceGroupS
         finally { FileGate.Release(); }
     }
 
+    public async Task<int> LoadHealthTimeoutAsync(CancellationToken cancellationToken)
+    {
+        await FileGate.WaitAsync(cancellationToken);
+        try { return ReadHealthTimeout(await ReadRootAsync(cancellationToken)); }
+        finally { FileGate.Release(); }
+    }
+
+    public async Task SaveHealthTimeoutAsync(int seconds, CancellationToken cancellationToken)
+    {
+        ValidateHealthTimeout(seconds);
+        await FileGate.WaitAsync(cancellationToken);
+        try
+        {
+            var root = await ReadRootAsync(cancellationToken) ?? NewRoot();
+            var settings = (JsonObject?)root["appSettings"] ?? new JsonObject();
+            root["appSettings"] = settings;
+            settings["healthTimeoutSeconds"] = seconds;
+            await WriteAtomicallyAsync(root, cancellationToken);
+        }
+        finally { FileGate.Release(); }
+    }
+
+    /// <summary>제어와 Health 제한시간을 한 번의 원자적 JSON 교체로 확정한다.</summary>
+    public async Task SaveTimeoutSettingsAsync(ControlTimeoutSettings control, int healthSeconds,
+        CancellationToken cancellationToken)
+    {
+        control.Validate();
+        ValidateHealthTimeout(healthSeconds);
+        await FileGate.WaitAsync(cancellationToken);
+        try
+        {
+            var root = await ReadRootAsync(cancellationToken) ?? NewRoot();
+            var settings = (JsonObject?)root["appSettings"] ?? new JsonObject();
+            root["appSettings"] = settings;
+            settings["controlTimeouts"] = JsonSerializer.SerializeToNode(control, JsonOptions);
+            settings["healthTimeoutSeconds"] = healthSeconds;
+            await WriteAtomicallyAsync(root, cancellationToken);
+        }
+        finally { FileGate.Release(); }
+    }
+
+    public async Task<int> LoadHistoryRetentionDaysAsync(CancellationToken cancellationToken)
+    {
+        await FileGate.WaitAsync(cancellationToken);
+        try { return ReadHistoryRetention(await ReadRootAsync(cancellationToken)); }
+        finally { FileGate.Release(); }
+    }
+
+    public async Task SaveRuntimeSettingsAsync(ControlTimeoutSettings control, int healthSeconds,
+        int retentionDays, CancellationToken cancellationToken)
+    {
+        control.Validate();
+        ValidateHealthTimeout(healthSeconds);
+        ValidateRetention(retentionDays);
+        await FileGate.WaitAsync(cancellationToken);
+        try
+        {
+            var root = await ReadRootAsync(cancellationToken) ?? NewRoot();
+            var settings = (JsonObject?)root["appSettings"] ?? new JsonObject();
+            root["appSettings"] = settings;
+            settings["controlTimeouts"] = JsonSerializer.SerializeToNode(control, JsonOptions);
+            settings["healthTimeoutSeconds"] = healthSeconds;
+            settings["historyRetentionDays"] = retentionDays;
+            await WriteAtomicallyAsync(root, cancellationToken);
+        }
+        finally { FileGate.Release(); }
+    }
+
+    private static int ReadHistoryRetention(JsonObject? root)
+    {
+        var node = root?["appSettings"]?["historyRetentionDays"];
+        if (node is null) return 30;
+        if (node is not JsonValue value || !value.TryGetValue<int>(out var days))
+            throw new AppSettingsException("작업 기록 보존 기간이 올바르지 않습니다.");
+        ValidateRetention(days);
+        return days;
+    }
+
+    private static void ValidateRetention(int days)
+    {
+        if (days is not (0 or 7 or 30))
+            throw new AppSettingsException("작업 기록 보존 기간은 7일, 30일, 무기한 중에서 선택해야 합니다.");
+    }
+
+    private static int ReadHealthTimeout(JsonObject? root)
+    {
+        var node = root?["appSettings"]?["healthTimeoutSeconds"];
+        if (node is null) return 5;
+        if (node is not JsonValue value || !value.TryGetValue<int>(out var seconds))
+            throw new AppSettingsException("Health 제한시간 설정이 올바르지 않습니다.");
+        ValidateHealthTimeout(seconds);
+        return seconds;
+    }
+
+    private static void ValidateHealthTimeout(int seconds)
+    {
+        if (seconds is not (3 or 5 or 10 or 15))
+            throw new AppSettingsException("Health 제한시간은 3, 5, 10, 15초 중에서 선택해야 합니다.");
+    }
+
     private static ControlTimeoutSettings ReadControlSettings(JsonObject? root)
     {
         var node = root?["appSettings"]?["controlTimeouts"];
@@ -319,6 +420,8 @@ public sealed class JsonAppSettingsStore : ISelectedProfileStore, IServiceGroupS
 
         _ = ReadGroups(root);
         _ = ReadControlSettings(root);
+        _ = ReadHealthTimeout(root);
+        _ = ReadHistoryRetention(root);
         return root;
     }
 

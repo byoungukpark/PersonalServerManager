@@ -9,7 +9,8 @@ using PersonalServerManager.Services.Aws;
 
 namespace PersonalServerManager.ViewModels;
 
-public sealed record RegisteredResourceRow(string Kind, string Name, string Id, string Region, string Status)
+public sealed record RegisteredResourceRow(string Kind, string Name, string Id, string Region, string Status,
+    string Health = "")
 {
     public string Tone => Status.Contains("이전 상태", StringComparison.Ordinal) ? "error" :
         Status is "running" or "available" or "조회 가능" ? "success" :
@@ -47,10 +48,12 @@ public sealed partial class GroupDetailViewModel : ViewModelBase
     private bool _hasAccessIssue;
     private bool _isStatusRefreshing;
     private int _selectedContentTabIndex;
+    private int _selectedResourceDetailTabIndex;
 
     public GroupDetailViewModel(NavigationService navigation, ServiceGroupService groups, GroupStatusService status,
         IConfirmationService confirmation, ResourceControlService? control = null,
-        AwsCloudWatchMetricQuery? metrics = null)
+        AwsCloudWatchMetricQuery? metrics = null, HealthCheckService? healthService = null,
+        Func<int>? healthTimeoutSeconds = null)
     {
         _navigation = navigation;
         _confirmation = confirmation;
@@ -58,6 +61,9 @@ public sealed partial class GroupDetailViewModel : ViewModelBase
         _status = status;
         _control = control;
         Monitoring = new GroupMonitoringViewModel(metrics);
+        Health = new GroupHealthViewModel(healthService ?? new HealthCheckService(), healthTimeoutSeconds ?? (() => 5));
+        Health.ResultsChanged += () => Resources = Resources.Select(row => row.Kind == "EC2"
+            ? row with { Health = Health.Summary(row.Id) } : row).ToArray();
         _navigation.PropertyChanged += OnNavigationChanged;
         BackToDashboardCommand = new RelayCommand(_ => navigation.NavigateTo(AppPage.Dashboard));
         OpenManagementCommand = new RelayCommand(_ =>
@@ -83,6 +89,7 @@ public sealed partial class GroupDetailViewModel : ViewModelBase
                     ? exception.Message : "그룹 제어 작업을 시작하지 못했습니다."));
         if (_control is not null)
         {
+            _control.ControlAvailabilityChanged += RefreshControlCommands;
             _control.Activity.PropertyChanged += (_, _) =>
             {
                 OnPropertyChanged(nameof(IsControlRunning));
@@ -95,6 +102,12 @@ public sealed partial class GroupDetailViewModel : ViewModelBase
 
     public ICommand BackToDashboardCommand { get; }
     public GroupMonitoringViewModel Monitoring { get; }
+    public GroupHealthViewModel Health { get; }
+    public int SelectedResourceDetailTabIndex
+    {
+        get => _selectedResourceDetailTabIndex;
+        set => SetProperty(ref _selectedResourceDetailTabIndex, value);
+    }
     public int SelectedContentTabIndex
     {
         get => _selectedContentTabIndex;
@@ -117,6 +130,7 @@ public sealed partial class GroupDetailViewModel : ViewModelBase
     public bool IsControlRunning => _control?.Activity.IsControlRunning == true;
     public bool CanOpenManagement => HasGroup && !IsLoading && !IsDeleting && !IsControlRunning;
     public bool IsControlSelection => SelectedResource is { Kind: "EC2" or "RDS" };
+    public bool IsEc2Selection => SelectedResource is { Kind: "EC2" };
     public double ResourcePanelHeight => 500;
     public string SelectionMessage => SelectedResource is null ? "리소스를 선택하세요." :
         SelectedResource.Kind == "S3" ? "S3는 조회만 제공하며 시작·중지 대상이 아닙니다." :
@@ -129,6 +143,9 @@ public sealed partial class GroupDetailViewModel : ViewModelBase
             if (!SetProperty(ref _selectedResource, value)) return;
             OnPropertyChanged(nameof(SelectionMessage));
             OnPropertyChanged(nameof(IsControlSelection));
+            OnPropertyChanged(nameof(IsEc2Selection));
+            SelectedResourceDetailTabIndex = 0;
+            Health.SetSelectedEc2(value?.Kind == "EC2" ? value.Id : null);
             RefreshControlCommands();
         }
     }
@@ -279,6 +296,7 @@ public sealed partial class GroupDetailViewModel : ViewModelBase
         if (!sameGroup)
         {
             Monitoring.SetGroup(null);
+            Health.SetGroup(null);
             SetGroup(null);
             Resources = [];
             StartOrder = [];
@@ -305,6 +323,7 @@ public sealed partial class GroupDetailViewModel : ViewModelBase
 
             SetGroup(group);
             Monitoring.SetGroup(group);
+            Health.SetGroup(group);
             Resources = group.Resources
                 .OrderBy(resource => resource.Kind)
                 .ThenBy(resource => resource.Name, StringComparer.OrdinalIgnoreCase)
@@ -314,8 +333,10 @@ public sealed partial class GroupDetailViewModel : ViewModelBase
                     resource.Id,
                     string.IsNullOrWhiteSpace(resource.Region) ? group.Region : resource.Region,
                     previous.TryGetValue((KindLabel(resource.Kind), resource.Id), out var old)
-                        ? old.Status : "상태 확인 전"))
+                        ? old.Status : "상태 확인 전",
+                    resource.Kind == AwsResourceKind.Ec2 ? Health.Summary(resource.Id) : ""))
                 .ToArray();
+            Health.SetSelectedEc2(SelectedResource?.Kind == "EC2" ? SelectedResource.Id : null);
 
             StartOrder = group.StartOrder.Select((item, index) =>
             {

@@ -17,3 +17,18 @@ public interface IControlSettingsStore
     Task<ControlTimeoutSettings> LoadControlSettingsAsync(CancellationToken cancellationToken);
     Task SaveControlSettingsAsync(ControlTimeoutSettings settings, CancellationToken cancellationToken);
 }
+
+public interface IHealthSettingsStore
+{
+    Task<int> LoadHealthTimeoutAsync(CancellationToken cancellationToken);
+    Task SaveHealthTimeoutAsync(int seconds, CancellationToken cancellationToken);
+    Task SaveTimeoutSettingsAsync(ControlTimeoutSettings control, int healthSeconds,
+        CancellationToken cancellationToken);
+}
+
+public interface IHistoryRetentionStore
+{
+    Task<int> LoadHistoryRetentionDaysAsync(CancellationToken cancellationToken);
+    Task SaveRuntimeSettingsAsync(ControlTimeoutSettings control, int healthSeconds,
+        int retentionDays, CancellationToken cancellationToken);
+}

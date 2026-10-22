@@ -93,14 +93,56 @@
                 </Border>
             </TabItem>
             <TabItem Header="Health">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <Border Style="{StaticResource SurfaceCardStyle}" Padding="24" Margin="0,16,0,0">
-                    <TextBlock Text="애플리케이션 Health 설정은 Phase 2 / 2.3에서 제공됩니다."
-                               Foreground="{StaticResource SecondaryTextBrush}" />
+                    <StackPanel>
+                        <TextBlock Text="EC2별 애플리케이션 Health" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Text="인증 없는 HTTP/HTTPS 주소를 등록합니다. EC2 상태와 앱 응답은 별도로 표시됩니다."
+                                   Margin="0,6,0,16" TextWrapping="Wrap" Foreground="{StaticResource SecondaryTextBrush}" />
+                        <TextBlock Text="연결된 EC2" />
+                        <ComboBox ItemsSource="{Binding Ec2Choices}" SelectedItem="{Binding HealthEc2}"
+                                  DisplayMemberPath="Name" Margin="0,6,0,12" MinWidth="300" HorizontalAlignment="Left" />
+                        <TextBlock Text="앱 이름" />
+                        <TextBox Text="{Binding NewHealthName, UpdateSourceTrigger=PropertyChanged}"
+                                 Style="{StaticResource WizardTextBoxStyle}" Margin="0,6,0,12" MaxLength="80" />
+                        <TextBlock Text="Health URL" />
+                        <TextBox Text="{Binding NewHealthUrl, UpdateSourceTrigger=PropertyChanged}"
+                                 Style="{StaticResource WizardTextBoxStyle}" Margin="0,6,0,12" />
+                        <TextBlock Text="판정 규칙: Http2xx / Json / StatusUp" />
+                        <ComboBox ItemsSource="{Binding HealthRules}" SelectedItem="{Binding NewHealthRule}"
+                                  Margin="0,6,0,12" HorizontalAlignment="Left" MinWidth="180" />
+                        <Button Content="앱 추가" Command="{Binding AddHealthCommand}"
+                                Style="{StaticResource SecondaryButtonStyle}" HorizontalAlignment="Left" Margin="0,0,0,18" />
+                        <ItemsControl ItemsSource="{Binding HealthApps}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border BorderBrush="{StaticResource StrokeBrush}" BorderThickness="1"
+                                            Padding="12" Margin="0,0,0,9" CornerRadius="7">
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Ec2Id}" Foreground="{StaticResource SecondaryTextBrush}" />
+                                            <TextBlock Text="앱 이름" Margin="0,8,0,4" />
+                                            <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBlock Text="Health URL" Margin="0,8,0,4" />
+                                            <TextBox Text="{Binding Url, UpdateSourceTrigger=PropertyChanged}" />
+                                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                                <ComboBox ItemsSource="{Binding DataContext.HealthRules, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                          SelectedItem="{Binding Rule}" MinWidth="150" />
+                                                <Button Content="제거" Margin="12,0,0,0"
+                                                        Command="{Binding DataContext.RemoveHealthCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                        CommandParameter="{Binding}" Style="{StaticResource SecondaryButtonStyle}" />
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
                 </Border>
+                </ScrollViewer>
             </TabItem>
             <TabItem Header="로그 설정">
                 <Border Style="{StaticResource SurfaceCardStyle}" Padding="24" Margin="0,16,0,0">
-                    <TextBlock Text="CloudWatch 로그 연결 설정은 Phase 2 / 2.4에서 제공됩니다."
+                    <TextBlock Text="CloudWatch 로그 연결 설정은 후속 구현 예정입니다."
                                Foreground="{StaticResource SecondaryTextBrush}" />
                 </Border>
             </TabItem>

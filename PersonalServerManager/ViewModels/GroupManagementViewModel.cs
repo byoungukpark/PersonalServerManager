@@ -12,7 +12,7 @@ using PersonalServerManager.Services.Persistence;
 namespace PersonalServerManager.ViewModels;
 
 /// <summary>그룹 관리의 메모리 초안을 보관한다. 확인과 저장 전에는 원본 그룹을 바꾸지 않는다.</summary>
-public sealed class GroupManagementViewModel : ViewModelBase
+public sealed partial class GroupManagementViewModel : ViewModelBase
 {
     private readonly ServiceGroupService _groups;
     private readonly AwsConnectionService _connection;
@@ -47,6 +47,7 @@ public sealed class GroupManagementViewModel : ViewModelBase
         RdsChoices = [];
         S3Choices = [];
         StartOrder = [];
+        InitializeHealth();
         _saveCommand = new AsyncRelayCommand(SaveAsync, () => HasChanges && !IsBusy && !IsControlRunning, ShowError);
         _deleteCommand = new AsyncRelayCommand(DeleteAsync, () => _original is not null && !IsBusy && !IsControlRunning, ShowError);
         _queryEc2Command = new AsyncRelayCommand(token => QueryResourcesAsync(AwsResourceKind.Ec2, token), CanQuery, ShowError);
@@ -84,7 +85,7 @@ public sealed class GroupManagementViewModel : ViewModelBase
          !SelectedResources().Select(ResourceKey).ToHashSet(StringComparer.OrdinalIgnoreCase)
              .SetEquals(original.Resources.Select(ResourceKey)) ||
          !StartOrder.Select(item => new GroupResourceRef(item.Kind, item.Id))
-             .SequenceEqual(original.StartOrder));
+             .SequenceEqual(original.StartOrder) || HealthChanged(original));
     public bool HasMessage => !string.IsNullOrWhiteSpace(Message);
     public bool IncludeEc2 => true;
     public bool IncludeRds => true;
@@ -129,6 +130,7 @@ public sealed class GroupManagementViewModel : ViewModelBase
         SetChoices(RdsChoices, []);
         SetChoices(S3Choices, []);
         StartOrder.Clear();
+        ClearHealth();
         SelectedOrder = null;
         Message = "";
         OnPropertyChanged(nameof(AccountId));
@@ -154,6 +156,7 @@ public sealed class GroupManagementViewModel : ViewModelBase
                 var resource = original.Resources.Single(resource => resource.Kind == item.Kind && resource.Id == item.Id);
                 StartOrder.Add(new StartOrderChoice(item.Kind, item.Id, resource.Name));
             }
+            LoadHealth(original);
             Ec2Status = RdsStatus = S3Status = "조회 전 · 저장된 연결은 유지됩니다.";
             Message = "";
             OnPropertyChanged(nameof(AccountId));
@@ -305,12 +308,14 @@ public sealed class GroupManagementViewModel : ViewModelBase
         var name = GroupRules.NormalizeName(Name);
         var resources = SelectedResources().ToArray();
         var order = StartOrder.Select(item => new GroupResourceRef(item.Kind, item.Id)).ToArray();
-        var preview = DescribeChanges(original, name, resources, order);
+        var health = BuildHealthEndpoints(resources);
+        var preview = DescribeChanges(original, name, resources, order) +
+            (HealthChanged(original) ? $"\nHealth 앱: {(original.HealthEndpoints?.Count ?? 0)}개 → {health.Count}개" : "");
         if (!await _confirmation.ConfirmAsync("그룹 변경사항 저장", preview, "변경사항 저장", token)) return;
         IsBusy = true;
         try
         {
-            var saved = await _groups.UpdateAsync(original, name, resources, order, _queryConnectionVersion, token);
+            var saved = await _groups.UpdateAsync(original, name, resources, order, _queryConnectionVersion, token, health);
             _original = saved;
             Name = saved.Name;
             NotifyChanges();
