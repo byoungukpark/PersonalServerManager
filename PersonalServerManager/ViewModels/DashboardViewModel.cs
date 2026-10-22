@@ -188,18 +188,8 @@ public sealed class DashboardViewModel : ViewModelBase
         _status = status;
         _groups.GroupDeleted += RemoveGroup;
         CreateGroupCommand = new RelayCommand(_ => navigation.NavigateTo(AppPage.GroupWorkspace));
-        OpenGroupCommand = new RelayCommand(parameter =>
-        {
-            if (parameter is ServiceGroupCard card) OpenGroupRequested?.Invoke(card.Id);
-        });
-        RefreshGroupCommand = new RelayCommand(async parameter =>
-        {
-            if (parameter is ServiceGroupCard card)
-            {
-                try { await RefreshGroupAsync(card); }
-                catch (Exception exception) { ShowLoadError(exception); }
-            }
-        });
+        OpenGroupCommand = new RelayCommand(OpenGroup);
+        RefreshGroupCommand = new RelayCommand(RefreshGroup);
         _refreshCommand = new AsyncRelayCommand(LoadAsync, () => !IsLoading, ShowLoadError);
     }
 
@@ -211,6 +201,18 @@ public sealed class DashboardViewModel : ViewModelBase
     public ICommand OpenGroupCommand { get; }
     public ICommand RefreshGroupCommand { get; }
     public ICommand RefreshCommand => _refreshCommand;
+
+    private void OpenGroup(object? parameter)
+    {
+        if (parameter is ServiceGroupCard card) OpenGroupRequested?.Invoke(card.Id);
+    }
+
+    private async void RefreshGroup(object? parameter)
+    {
+        if (parameter is not ServiceGroupCard card) return;
+        try { await RefreshGroupAsync(card); }
+        catch (Exception exception) { ShowLoadError(exception); }
+    }
     public bool HasGroups => Groups.Count > 0;
     public bool IsEmpty => !IsLoading && !HasGroups && !HasError;
     public string GroupCountText => $"{Groups.Count}개";

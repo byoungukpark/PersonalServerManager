@@ -48,6 +48,7 @@ internal sealed partial class AwsProfileSession : IAwsProfileSession, IAwsResour
         try
         {
             using var client = new AmazonSecurityTokenServiceClient(_credentials, _defaultRegion);
+            // STS GetCallerIdentity로 선택한 프로필의 계정과 호출 주체를 확인한다.
             var response = await client.GetCallerIdentityAsync(new GetCallerIdentityRequest(), cancellationToken);
             if (response.Account is not { Length: 12 } account ||
                 !account.All(char.IsAsciiDigit) || string.IsNullOrWhiteSpace(response.Arn))
@@ -87,6 +88,7 @@ internal sealed partial class AwsProfileSession : IAwsProfileSession, IAwsResour
             string? nextToken = null;
             do
             {
+                // EC2 DescribeInstances로 리전의 인스턴스 목록을 페이지별로 읽는다.
                 var response = await client.DescribeInstancesAsync(
                     new DescribeInstancesRequest { NextToken = nextToken }, cancellationToken);
                 foreach (var reservation in response.Reservations ?? [])
@@ -132,6 +134,7 @@ internal sealed partial class AwsProfileSession : IAwsProfileSession, IAwsResour
             string? marker = null;
             do
             {
+                // RDS DescribeDBInstances로 리전의 DB 인스턴스 목록을 페이지별로 읽는다.
                 var response = await client.DescribeDBInstancesAsync(
                     new DescribeDBInstancesRequest { Marker = marker }, cancellationToken);
                 foreach (var instance in response.DBInstances ?? [])
@@ -169,6 +172,7 @@ internal sealed partial class AwsProfileSession : IAwsProfileSession, IAwsResour
             string? continuationToken = null;
             do
             {
+                // S3 ListBuckets로 현재 계정의 버킷 목록을 페이지별로 읽는다.
                 var response = await client.ListBucketsAsync(new ListBucketsRequest
                 {
                     ContinuationToken = continuationToken,

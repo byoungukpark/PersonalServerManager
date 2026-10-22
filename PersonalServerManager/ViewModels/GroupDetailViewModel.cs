@@ -62,14 +62,10 @@ public sealed partial class GroupDetailViewModel : ViewModelBase
         _control = control;
         Monitoring = new GroupMonitoringViewModel(metrics);
         Health = new GroupHealthViewModel(healthService ?? new HealthCheckService(), healthTimeoutSeconds ?? (() => 5));
-        Health.ResultsChanged += () => Resources = Resources.Select(row => row.Kind == "EC2"
-            ? row with { Health = Health.Summary(row.Id) } : row).ToArray();
+        Health.ResultsChanged += UpdateHealthSummaries;
         _navigation.PropertyChanged += OnNavigationChanged;
         BackToDashboardCommand = new RelayCommand(_ => navigation.NavigateTo(AppPage.Dashboard));
-        OpenManagementCommand = new RelayCommand(_ =>
-        {
-            if (_groupId is { } id && CanOpenManagement) ManageGroupRequested?.Invoke(id);
-        });
+        OpenManagementCommand = new RelayCommand(OpenManagement);
         _refreshCommand = new AsyncRelayCommand(
             token => _groupId is { } id ? LoadAsync(id, token) : Task.CompletedTask,
             () => _groupId.HasValue && !IsLoading && !HasAccessIssue && !IsDeleting,
@@ -90,14 +86,27 @@ public sealed partial class GroupDetailViewModel : ViewModelBase
         if (_control is not null)
         {
             _control.ControlAvailabilityChanged += RefreshControlCommands;
-            _control.Activity.PropertyChanged += (_, _) =>
-            {
-                OnPropertyChanged(nameof(IsControlRunning));
-                OnPropertyChanged(nameof(CanOpenManagement));
-                RefreshControlCommands();
-                _deleteCommand.RaiseCanExecuteChanged();
-            };
+            _control.Activity.PropertyChanged += OnControlActivityChanged;
         }
+    }
+
+    private void UpdateHealthSummaries()
+    {
+        Resources = Resources.Select(row => row.Kind == "EC2"
+            ? row with { Health = Health.Summary(row.Id) } : row).ToArray();
+    }
+
+    private void OpenManagement(object? parameter)
+    {
+        if (_groupId is { } id && CanOpenManagement) ManageGroupRequested?.Invoke(id);
+    }
+
+    private void OnControlActivityChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
+    {
+        OnPropertyChanged(nameof(IsControlRunning));
+        OnPropertyChanged(nameof(CanOpenManagement));
+        RefreshControlCommands();
+        _deleteCommand.RaiseCanExecuteChanged();
     }
 
     public ICommand BackToDashboardCommand { get; }

@@ -180,9 +180,60 @@ public sealed class GroupWizardViewModel : ViewModelBase
             OnPropertyChanged(nameof(RegionText));
         }
     }
-    public bool IncludeEc2 { get => _includeEc2; set { if (SetProperty(ref _includeEc2, value)) { if (!value) { ClearChoices(Ec2Choices); Ec2Status = "아직 조회하지 않았습니다."; _ec2HasResult = false; } _dirty = true; OnPropertyChanged(nameof(HasSelectedServices)); RaiseCommands(); } } }
-    public bool IncludeRds { get => _includeRds; set { if (SetProperty(ref _includeRds, value)) { if (!value) { ClearChoices(RdsChoices); RdsStatus = "아직 조회하지 않았습니다."; _rdsHasResult = false; } _dirty = true; OnPropertyChanged(nameof(HasSelectedServices)); RaiseCommands(); } } }
-    public bool IncludeS3 { get => _includeS3; set { if (SetProperty(ref _includeS3, value)) { if (!value) { ClearChoices(S3Choices); S3Status = "아직 조회하지 않았습니다."; _s3HasResult = false; } _dirty = true; OnPropertyChanged(nameof(HasSelectedServices)); RaiseCommands(); } } }
+    public bool IncludeEc2
+    {
+        get => _includeEc2;
+        set
+        {
+            if (!SetProperty(ref _includeEc2, value)) return;
+            if (!value)
+            {
+                ClearChoices(Ec2Choices);
+                Ec2Status = "아직 조회하지 않았습니다.";
+                _ec2HasResult = false;
+            }
+            OnServiceSelectionChanged();
+        }
+    }
+
+    public bool IncludeRds
+    {
+        get => _includeRds;
+        set
+        {
+            if (!SetProperty(ref _includeRds, value)) return;
+            if (!value)
+            {
+                ClearChoices(RdsChoices);
+                RdsStatus = "아직 조회하지 않았습니다.";
+                _rdsHasResult = false;
+            }
+            OnServiceSelectionChanged();
+        }
+    }
+
+    public bool IncludeS3
+    {
+        get => _includeS3;
+        set
+        {
+            if (!SetProperty(ref _includeS3, value)) return;
+            if (!value)
+            {
+                ClearChoices(S3Choices);
+                S3Status = "아직 조회하지 않았습니다.";
+                _s3HasResult = false;
+            }
+            OnServiceSelectionChanged();
+        }
+    }
+
+    private void OnServiceSelectionChanged()
+    {
+        _dirty = true;
+        OnPropertyChanged(nameof(HasSelectedServices));
+        RaiseCommands();
+    }
     public StartOrderChoice? SelectedOrder { get => _selectedOrder; set { if (SetProperty(ref _selectedOrder, value)) NotifyOrderChanged(); } }
     public int Step
     {

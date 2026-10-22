@@ -38,7 +38,97 @@ var checks = new List<(string Name, Func<Task> Run)>
     ,("Health 설정 JSON 저장·복원·유효성", HealthPersistenceAsync)
     ,("SQLite 작업·단계 기록·검색·복원·보존", ControlHistoryAsync)
     ,("작업 기록 오류 시 새 AWS 제어 차단", HistoryFailClosedAsync)
+    ,("그룹 등록부터 조회·제어·모니터링·Health·이력 복원 통합", IntegratedFlowAsync)
 };
+
+static async Task IntegratedFlowAsync()
+{
+    var directory = Path.Combine(Path.GetTempPath(), $"psm-integration-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(directory);
+    try
+    {
+        var settingsPath = Path.Combine(directory, "settings.json");
+        var historyPath = Path.Combine(directory, "control-history.db");
+        var settings = new JsonAppSettingsStore(settingsPath);
+        var activity = new ControlActivityState();
+        var factory = new FakeSessionFactory();
+        var connection = new AwsConnectionService(new FakeProfiles(), factory, activity);
+        await connection.ConnectAsync("first", default);
+        var session = factory.LastSession!;
+        var groups = new ServiceGroupService(settings, controlActivity: activity, connection: connection);
+        var sample = Group();
+        var group = await groups.CreateAsync(sample.Name, sample.AccountId, sample.Region,
+            sample.ProfileName, sample.Resources, sample.StartOrder, default);
+        var endpoint = new HealthEndpoint(Guid.NewGuid(), "i-1", "웹 앱",
+            "https://example.test/health", HealthCheckRule.StatusUp);
+        group = await groups.UpdateAsync(group, group.Name, group.Resources, group.StartOrder,
+            null, default, [endpoint]);
+        await settings.SaveTimeoutSettingsAsync(new ControlTimeoutSettings(), 5, default);
+
+        var query = new FakeQuery
+        {
+            Ec2 = (_, _) => Task.FromResult<IReadOnlyList<Ec2InstanceResource>>(
+                [new("i-1", "웹", "t3.micro", session.Sent == 0 ? "stopped" : "running")]),
+            Rds = (_, _) => Task.FromResult<IReadOnlyList<RdsInstanceResource>>(
+                [new("db-1", "mysql", session.Sent < 2 ? "stopped" : "available")]),
+            S3 = _ => Task.FromResult<IReadOnlyList<S3BucketResource>>([new("bucket-1", "us-east-1")])
+        };
+        var status = new GroupStatusService(connection, query);
+        var dashboard = new DashboardViewModel(new NavigationService(), groups, status);
+        await dashboard.LoadAsync();
+        Check(dashboard.Groups.Single().Statuses.Count == 3 && query.Calls == 3,
+            "등록 그룹의 EC2/RDS/S3 기본 상태를 대시보드에서 읽지 못함");
+
+        var history = new ControlHistoryStore(historyPath);
+        await history.InitializeAsync(30, default);
+        var clock = new ManualControlClock();
+        var control = new ResourceControlService(connection, groups, activity,
+            () => new ControlTimeoutSettings(), clock, history);
+        session.ControlState = (_, kind, id, _) => Task.FromResult(new ResourceControlSnapshot(
+            session.SentCommands.Any(command => command.Id == id)
+                ? kind == AwsResourceKind.Ec2 ? "running" : "available"
+                : "stopped"));
+        var operation = control.ExecuteGroupAsync(group.Id, ResourceControlAction.Start,
+            connection.ActiveConnection!.ConnectionVersion, group.StartOrder);
+        await UntilAsync(() => session.Sent == 1 && clock.PendingTimers >= 2);
+        clock.Advance(TimeSpan.FromSeconds(5));
+        await UntilAsync(() => session.Sent == 2 && clock.PendingTimers >= 2);
+        clock.Advance(TimeSpan.FromSeconds(15));
+        await operation;
+        var jobs = await history.SearchAsync(group.Name, "완료", default);
+        var steps = await history.StepsAsync(jobs.Single().Id, default);
+        Check(activity.Message.StartsWith("완료") && session.SentCommands.Select(command => command.Id)
+                .SequenceEqual(["i-1", "db-1"]) && steps.Count == 2 &&
+              steps.All(step => step.RequestAccepted && step.GoalConfirmed),
+            "그룹 시작 순서·목표 상태 또는 SQLite 단계 기록이 일치하지 않음");
+        await dashboard.RefreshStatusesAsync();
+        Check(dashboard.Groups.Single().Statuses.All(item => item.Tone == "success"),
+            "제어 후 대시보드 상태가 갱신되지 않음");
+
+        session.Metrics = (resource, _, _) => Task.FromResult(MetricSample(resource.Kind));
+        var metrics = new AwsCloudWatchMetricQuery(connection);
+        var metricCounts = await Task.WhenAll(group.Resources.Select(async resource =>
+            (await metrics.ReadAsync(group, resource, TimeSpan.FromHours(1), default)).Count));
+        Check(metricCounts.SequenceEqual([4, 6, 2]), "등록 자원별 CloudWatch 지표 통합 조회 오류");
+        using var client = new HttpClient(new DelegateHttpHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            { Content = new StringContent("{\"status\":\"UP\"}") })));
+        using var health = new HealthCheckService(client);
+        Check((await health.CheckAsync(endpoint, await settings.LoadHealthTimeoutAsync(default))).State
+            == HealthCheckState.Healthy, "저장된 Health 제한시간으로 앱 상태를 확인하지 못함");
+
+        var reopenedGroup = (await new JsonAppSettingsStore(settingsPath).LoadGroupsAsync(default)).Single();
+        var reopenedHistory = new ControlHistoryStore(historyPath);
+        await reopenedHistory.InitializeAsync(30, default);
+        Check(reopenedGroup.HealthEndpoints?.Single() == endpoint &&
+              (await reopenedHistory.SearchAsync(group.Name, "완료", default)).Single().Id == jobs.Single().Id,
+            "재실행 후 그룹·Health 설정 또는 제어 이력 복원 오류");
+    }
+    finally
+    {
+        Directory.Delete(directory, true);
+    }
+}
 
 static async Task ControlHistoryAsync()
 {

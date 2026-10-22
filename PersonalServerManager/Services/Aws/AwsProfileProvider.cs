@@ -15,6 +15,7 @@ public sealed class AwsProfileProvider : IAwsProfileProvider
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var sharedFile = OpenSharedFile();
+                // AWS SDK의 공유 프로필 API로 로컬 credentials/config의 프로필 이름을 나열한다.
                 var names = sharedFile.ListProfileNames()
                     .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
                     .ToArray();
@@ -43,6 +44,7 @@ public sealed class AwsProfileProvider : IAwsProfileProvider
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var sharedFile = OpenSharedFile();
+                // 선택한 프로필을 공유 설정 파일에서 찾고 자격 증명 해석 전에 지원 방식을 확인한다.
                 if (!sharedFile.TryGetProfile(profileName, out var profile))
                 {
                     throw new AwsConnectionException(
@@ -60,6 +62,7 @@ public sealed class AwsProfileProvider : IAwsProfileProvider
                         "이 프로필의 인증 방식은 현재 지원하지 않습니다. AWS CLI의 다른 프로필을 선택하세요.");
                 }
 
+                // AWS SDK가 공유 프로필의 정적 키 또는 역할 기반 자격 증명을 해석한다.
                 if (!AWSCredentialsFactory.TryGetAWSCredentials(profile, sharedFile, out var credentials))
                 {
                     throw new AwsConnectionException(
